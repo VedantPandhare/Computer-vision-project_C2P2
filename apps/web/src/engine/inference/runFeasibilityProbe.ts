@@ -22,6 +22,8 @@ export function runFeasibilityProbe(
         return;
       }
 
+      if (response.type !== 'probe-result') return;
+
       resolve({
         status: 'passed',
         message: 'The browser loaded the complete model and produced a depth tensor.',
@@ -41,4 +43,3 @@ export function runFeasibilityProbe(
     worker.postMessage({ type: 'probe', preferredBackend });
   });
 }
-

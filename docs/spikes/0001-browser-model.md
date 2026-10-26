@@ -1,6 +1,6 @@
 # Spike 0001: Browser model feasibility
 
-**Status:** implementation ready; device measurement pending
+**Status:** browser path passed; additional target-device measurements pending
 
 ## Question
 
@@ -24,3 +24,13 @@ The spike passes on a device when the readiness panel reports `PASSED` and a
 non-empty output shape. Actual timings must be recorded on the target machines;
 production performance is not inferred from the build succeeding.
 
+## First measured run
+
+| Environment | Backend | Model load | Inference | Input/output |
+| --- | --- | ---: | ---: | --- |
+| Headless Chrome 155 on the development Windows machine | WebGPU | 37.75 s | 19.86 s | 784 × 518 |
+
+The bundled Terrace image produced a non-empty colour depth canvas. This is a
+feasibility pass, but the latency is not acceptable for live use. Later profile
+work must use smaller fixed input shapes, and live mode must avoid waiting for
+every model result by using keyframes and propagation.

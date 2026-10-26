@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import * as ort from 'onnxruntime-web/webgpu';
+import ortWasmUrl from '../../../../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
 import { MODEL_CONFIG } from './modelConfig';
 import { calculateModelSize, normalizeDepth } from './depthMath';
 import type {
@@ -10,6 +11,11 @@ import type {
 } from './messages';
 
 const workerScope: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope;
+ort.env.wasm.numThreads = workerScope.crossOriginIsolated
+  ? Math.min(4, workerScope.navigator.hardwareConcurrency || 1)
+  : 1;
+ort.env.wasm.proxy = false;
+ort.env.wasm.wasmPaths = { wasm: new URL(ortWasmUrl, workerScope.location.href).href };
 let session: ort.InferenceSession | null = null;
 let sessionBackend: InferenceBackend | null = null;
 
@@ -41,7 +47,13 @@ async function ensureSession(preferredBackend: InferenceBackend): Promise<{
     if (preferredBackend === 'wasm') throw preferredError;
     backend = 'wasm';
     respond({ type: 'progress', message: 'WebGPU session failed. Trying WebAssembly…' });
-    session = await createSession('wasm');
+    try {
+      session = await createSession('wasm');
+    } catch (fallbackError) {
+      const webGpuMessage = preferredError instanceof Error ? preferredError.message : String(preferredError);
+      const wasmMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`WebGPU failed: ${webGpuMessage} | WebAssembly failed: ${wasmMessage}`);
+    }
   }
 
   sessionBackend = backend;
@@ -51,9 +63,11 @@ async function ensureSession(preferredBackend: InferenceBackend): Promise<{
 async function runProbe(preferredBackend: InferenceBackend): Promise<void> {
   respond({ type: 'progress', message: `Loading the model with ${preferredBackend.toUpperCase()}…` });
   const { backend, loadMs } = await ensureSession(preferredBackend);
+  const activeSession = session;
+  if (!activeSession) throw new Error('The inference session was not created.');
   const elementCount = MODEL_CONFIG.channels * MODEL_CONFIG.inputWidth * MODEL_CONFIG.inputHeight;
   const inputData = new Float32Array(elementCount);
-  const inputName = session.inputNames[0];
+  const inputName = activeSession.inputNames[0];
   const input = new ort.Tensor('float32', inputData, [
     1,
     MODEL_CONFIG.channels,
@@ -63,9 +77,9 @@ async function runProbe(preferredBackend: InferenceBackend): Promise<void> {
 
   respond({ type: 'progress', message: 'Running one synthetic inference to validate the graph…' });
   const inferenceStarted = performance.now();
-  const output = await session.run({ [inputName]: input });
+  const output = await activeSession.run({ [inputName]: input });
   const inferenceMs = performance.now() - inferenceStarted;
-  const firstOutput = output[session.outputNames[0]];
+  const firstOutput = output[activeSession.outputNames[0]];
 
   if (!firstOutput || firstOutput.size === 0) {
     throw new Error('The model returned no depth values.');
@@ -80,14 +94,25 @@ async function runProbe(preferredBackend: InferenceBackend): Promise<void> {
   });
 }
 
-function imageToTensor(image: ImageBitmap): { tensor: ort.Tensor; modelWidth: number; modelHeight: number } {
-  const { width: modelWidth, height: modelHeight } = calculateModelSize(image.width, image.height);
+function imageToTensor(
+  pixels: Uint8ClampedArray,
+  sourceWidth: number,
+  sourceHeight: number,
+): { tensor: ort.Tensor; modelWidth: number; modelHeight: number } {
+  const { width: modelWidth, height: modelHeight } = calculateModelSize(sourceWidth, sourceHeight);
+  const sourceCanvas = new OffscreenCanvas(sourceWidth, sourceHeight);
+  const sourceContext = sourceCanvas.getContext('2d');
+  if (!sourceContext) throw new Error('The browser could not create an image source canvas.');
+  const pixelCopy = new Uint8ClampedArray(pixels.length);
+  pixelCopy.set(pixels);
+  sourceContext.putImageData(new ImageData(pixelCopy, sourceWidth, sourceHeight), 0, 0);
+
   const canvas = new OffscreenCanvas(modelWidth, modelHeight);
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('The browser could not create an image preprocessing canvas.');
 
-  context.drawImage(image, 0, 0, modelWidth, modelHeight);
-  const pixels = context.getImageData(0, 0, modelWidth, modelHeight).data;
+  context.drawImage(sourceCanvas, 0, 0, modelWidth, modelHeight);
+  const resizedPixels = context.getImageData(0, 0, modelWidth, modelHeight).data;
   const planeSize = modelWidth * modelHeight;
   const input = new Float32Array(planeSize * 3);
   const mean = [0.485, 0.456, 0.406];
@@ -95,9 +120,9 @@ function imageToTensor(image: ImageBitmap): { tensor: ort.Tensor; modelWidth: nu
 
   for (let pixelIndex = 0; pixelIndex < planeSize; pixelIndex += 1) {
     const rgbaIndex = pixelIndex * 4;
-    input[pixelIndex] = (pixels[rgbaIndex] / 255 - mean[0]) / standardDeviation[0];
-    input[planeSize + pixelIndex] = (pixels[rgbaIndex + 1] / 255 - mean[1]) / standardDeviation[1];
-    input[planeSize * 2 + pixelIndex] = (pixels[rgbaIndex + 2] / 255 - mean[2]) / standardDeviation[2];
+    input[pixelIndex] = (resizedPixels[rgbaIndex] / 255 - mean[0]) / standardDeviation[0];
+    input[planeSize + pixelIndex] = (resizedPixels[rgbaIndex + 1] / 255 - mean[1]) / standardDeviation[1];
+    input[planeSize * 2 + pixelIndex] = (resizedPixels[rgbaIndex + 2] / 255 - mean[2]) / standardDeviation[2];
   }
 
   return {
@@ -107,15 +132,17 @@ function imageToTensor(image: ImageBitmap): { tensor: ort.Tensor; modelWidth: nu
   };
 }
 
-async function estimateDepth(image: ImageBitmap, preferredBackend: InferenceBackend): Promise<void> {
-  const sourceWidth = image.width;
-  const sourceHeight = image.height;
+async function estimateDepth(
+  pixels: Uint8ClampedArray,
+  sourceWidth: number,
+  sourceHeight: number,
+  preferredBackend: InferenceBackend,
+): Promise<void> {
   respond({ type: 'progress', message: `Loading ${MODEL_CONFIG.label}…` });
   const { backend, loadMs } = await ensureSession(preferredBackend);
 
   respond({ type: 'progress', message: 'Preparing image pixels for the model…' });
-  const { tensor, modelWidth, modelHeight } = imageToTensor(image);
-  image.close();
+  const { tensor, modelWidth, modelHeight } = imageToTensor(pixels, sourceWidth, sourceHeight);
 
   if (!session) throw new Error('The inference session was not created.');
   respond({ type: 'progress', message: 'Estimating relative depth…' });
@@ -155,8 +182,8 @@ workerScope.addEventListener('message', (event: MessageEvent<InferenceWorkerRequ
   }
 
   if (event.data.type === 'estimate') {
-    void estimateDepth(event.data.image, event.data.preferredBackend).catch((error: unknown) => {
-      event.data.image.close();
+    const { pixels, width, height, preferredBackend } = event.data;
+    void estimateDepth(pixels, width, height, preferredBackend).catch((error: unknown) => {
       respond({
         type: 'error',
         message: error instanceof Error ? error.message : 'Unknown depth estimation error.',

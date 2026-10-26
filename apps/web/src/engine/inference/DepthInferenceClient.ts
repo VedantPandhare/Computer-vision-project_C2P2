@@ -28,18 +28,22 @@ export class DepthInferenceClient {
   }
 
   estimate(
-    image: ImageBitmap,
+    pixels: Uint8ClampedArray,
+    width: number,
+    height: number,
     preferredBackend: InferenceBackend,
     onProgress: (message: string) => void,
   ): Promise<DepthResult> {
     if (this.pending) {
-      image.close();
       return Promise.reject(new Error('A depth estimate is already running.'));
     }
 
     return new Promise((resolve, reject) => {
       this.pending = { resolve, reject, onProgress };
-      this.worker.postMessage({ type: 'estimate', preferredBackend, image }, [image]);
+      this.worker.postMessage(
+        { type: 'estimate', preferredBackend, pixels, width, height },
+        [pixels.buffer],
+      );
     });
   }
 

@@ -22,7 +22,6 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
   const clientRef = useRef<DepthInferenceClient | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const objectUrlRef = useRef<string | null>(null);
   const [status, setStatus] = useState<PhotoStatus>('empty');
   const [message, setMessage] = useState('Drop a photo here, or choose one from your computer.');
   const [sourceUrl, setSourceUrl] = useState<string | null>(null);
@@ -35,7 +34,6 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
     clientRef.current = new DepthInferenceClient();
     return () => {
       clientRef.current?.dispose();
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
     };
   }, []);
 
@@ -61,21 +59,48 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
       return;
     }
 
+    try {
+      const source = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.addEventListener('load', () => resolve(String(reader.result)), { once: true });
+        reader.addEventListener('error', () => reject(new Error('The selected image could not be read.')), { once: true });
+        reader.readAsDataURL(file);
+      });
+      await processImageSource(source, file.name);
+    } catch (error) {
+      setStatus('error');
+      setMessage(error instanceof Error ? error.message : 'The photo could not be processed.');
+    }
+  }
+
+  async function processImageSource(source: string, name: string): Promise<void> {
     setStatus('decoding');
     setMessage('Decoding image…');
     setResult(null);
-    setFileName(file.name);
+    setFileName(name);
 
     try {
-      const image = await createImageBitmap(file, { imageOrientation: 'from-image' });
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-      objectUrlRef.current = URL.createObjectURL(file);
-      setSourceUrl(objectUrlRef.current);
+      const decodedImage = new Image();
+      decodedImage.src = source;
+      await decodedImage.decode();
+      const pixelCanvas = document.createElement('canvas');
+      pixelCanvas.width = decodedImage.naturalWidth;
+      pixelCanvas.height = decodedImage.naturalHeight;
+      const pixelContext = pixelCanvas.getContext('2d', { willReadFrequently: true });
+      if (!pixelContext) throw new Error('The browser could not read the selected image.');
+      pixelContext.drawImage(decodedImage, 0, 0);
+      const pixels = pixelContext.getImageData(0, 0, pixelCanvas.width, pixelCanvas.height).data;
+      setSourceUrl(source);
       setStatus('running');
+      setMessage('Starting the inference worker…');
 
-      const depth = await clientRef.current!.estimate(image, preferredBackend, (progress) => {
-        setMessage(progress);
-      });
+      const depth = await clientRef.current!.estimate(
+        pixels,
+        pixelCanvas.width,
+        pixelCanvas.height,
+        preferredBackend,
+        (progress) => setMessage(progress),
+      );
 
       setResult(depth);
       setStatus('ready');
@@ -95,15 +120,7 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
 
   async function loadSample(path: string, name: string): Promise<void> {
     setMessage('Loading bundled example…');
-    try {
-      const response = await fetch(path);
-      if (!response.ok) throw new Error('The bundled example could not be loaded.');
-      const blob = await response.blob();
-      await processFile(new File([blob], name, { type: blob.type || 'image/svg+xml' }));
-    } catch (error) {
-      setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'The bundled example could not be loaded.');
-    }
+    await processImageSource(path, name);
   }
 
   if (!sourceUrl) {
@@ -142,8 +159,8 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
         </div>
         <div className="sample-row">
           <span>OR TRY A BUNDLED SCENE</span>
-          <button onClick={() => void loadSample('/samples/terrace.svg', 'terrace.svg')} type="button">Terrace</button>
-          <button onClick={() => void loadSample('/samples/studio.svg', 'studio.svg')} type="button">Studio</button>
+          <button onClick={() => void loadSample('/samples/terrace.png', 'terrace.png')} type="button">Terrace</button>
+          <button onClick={() => void loadSample('/samples/studio.png', 'studio.png')} type="button">Studio</button>
         </div>
       </div>
     );

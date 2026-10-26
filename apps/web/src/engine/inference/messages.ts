@@ -2,7 +2,13 @@ export type InferenceBackend = 'webgpu' | 'wasm';
 
 export type InferenceWorkerRequest =
   | { type: 'probe'; preferredBackend: InferenceBackend }
-  | { type: 'estimate'; preferredBackend: InferenceBackend; image: ImageBitmap }
+  | {
+      type: 'estimate';
+      preferredBackend: InferenceBackend;
+      pixels: Uint8ClampedArray;
+      width: number;
+      height: number;
+    }
   | { type: 'dispose' };
 
 export type InferenceWorkerResponse =
