@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 640">
+  <defs>
+    <linearGradient id="sky" x2="0" y2="1"><stop stop-color="#8fc5c4"/><stop offset="1" stop-color="#f2d39f"/></linearGradient>
+    <linearGradient id="ground" x2="0" y2="1"><stop stop-color="#80795c"/><stop offset="1" stop-color="#292f28"/></linearGradient>
+  </defs>
+  <rect width="960" height="640" fill="url(#sky)"/>
+  <path d="M0 270L130 155 255 270 370 185 505 270 640 145 805 275 960 180V390H0Z" fill="#526d67" opacity=".75"/>
+  <rect y="350" width="960" height="290" fill="url(#ground)"/>
+  <path d="M310 640L455 355H545L700 640Z" fill="#c6b893"/>
+  <rect x="94" y="245" width="215" height="210" fill="#d4b986"/>
+  <polygon points="70,250 200,158 335,250" fill="#713f2d"/>
+  <rect x="130" y="320" width="56" height="135" fill="#493b30"/>
+  <rect x="220" y="290" width="50" height="58" fill="#87b4b0"/>
+  <g fill="#294d3d"><circle cx="790" cy="300" r="90"/><rect x="772" y="300" width="36" height="175"/></g>
+  <g fill="#1f372d"><circle cx="98" cy="474" r="55"/><circle cx="164" cy="500" r="70"/><circle cx="850" cy="495" r="92"/></g>
+  <circle cx="480" cy="292" r="28" fill="#f2f0d6"/><rect x="473" y="320" width="14" height="80" fill="#4a4a3a"/>
+</svg>

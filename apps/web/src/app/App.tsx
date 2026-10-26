@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { detectCapabilities } from './capabilities';
+import { choosePreferredBackend, detectCapabilities } from './capabilities';
 import type { AppMode, CapabilityReport, FeasibilityResult } from './types';
 import { MODEL_CONFIG } from '../engine/inference/modelConfig';
 import { runFeasibilityProbe } from '../engine/inference/runFeasibilityProbe';
+import { PhotoWorkspace } from '../capture/PhotoWorkspace';
 
 const MODES: AppMode[] = ['Live', 'Photo', 'Inspect', 'Compare', 'Benchmark', 'About'];
 
@@ -31,7 +32,7 @@ export function App() {
     void detectCapabilities().then(setCapabilities);
   }, []);
 
-  const preferredBackend = capabilities.webgpu.state === 'available' ? 'webgpu' : 'wasm';
+  const preferredBackend = choosePreferredBackend(capabilities);
   const capabilityList = useMemo(() => Object.values(capabilities), [capabilities]);
 
   async function handleProbe(): Promise<void> {
@@ -102,28 +103,34 @@ export function App() {
           </div>
         </section>
 
-        <section className="workspace" aria-label={`${mode} workspace`}>
+        <section className={mode === 'Photo' ? 'workspace photo-mode' : 'workspace'} aria-label={`${mode} workspace`}>
           <div className="canvas-card">
-            <div className="canvas-topline">
-              <span>{mode.toUpperCase()} / PREVIEW</span>
-              <span>DEPTH 0.00—1.00</span>
-            </div>
-            <div className="depth-stage">
-              <div className="depth-orb far" />
-              <div className="depth-orb middle" />
-              <div className="depth-orb near" />
-              <div className="depth-grid" />
-              <div className="stage-label label-far">FAR</div>
-              <div className="stage-label label-near">NEAR</div>
-              <div className="stage-copy">
-                <span>INPUT WAITING</span>
-                <strong>{mode} mode foundation is ready.</strong>
-                <small>Photo and camera pipelines arrive in the next steps.</small>
-              </div>
-            </div>
-            <div className="depth-scale" aria-label="Depth scale from far to near">
-              <span>FAR · 0</span><i /><span>1 · NEAR</span>
-            </div>
+            {mode === 'Photo' ? (
+              <PhotoWorkspace preferredBackend={preferredBackend} />
+            ) : (
+              <>
+                <div className="canvas-topline">
+                  <span>{mode.toUpperCase()} / PREVIEW</span>
+                  <span>DEPTH 0.00—1.00</span>
+                </div>
+                <div className="depth-stage">
+                  <div className="depth-orb far" />
+                  <div className="depth-orb middle" />
+                  <div className="depth-orb near" />
+                  <div className="depth-grid" />
+                  <div className="stage-label label-far">FAR</div>
+                  <div className="stage-label label-near">NEAR</div>
+                  <div className="stage-copy">
+                    <span>INPUT WAITING</span>
+                    <strong>{mode} mode foundation is ready.</strong>
+                    <small>{mode === 'Live' ? 'Camera capture arrives in Step 3.' : 'This mode will be activated in a later step.'}</small>
+                  </div>
+                </div>
+                <div className="depth-scale" aria-label="Depth scale from far to near">
+                  <span>FAR · 0</span><i /><span>1 · NEAR</span>
+                </div>
+              </>
+            )}
           </div>
 
           <aside className="side-panel">
@@ -181,4 +188,3 @@ export function App() {
     </div>
   );
 }
-

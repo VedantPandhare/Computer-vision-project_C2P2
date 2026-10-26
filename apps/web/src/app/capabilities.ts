@@ -1,4 +1,5 @@
 import type { CapabilityReport } from './types';
+import type { InferenceBackend } from '../engine/inference/messages';
 
 interface NavigatorWithGpu extends Navigator {
   gpu?: {
@@ -55,3 +56,6 @@ export async function detectCapabilities(): Promise<CapabilityReport> {
   };
 }
 
+export function choosePreferredBackend(report: CapabilityReport): InferenceBackend {
+  return report.webgpu.state === 'available' ? 'webgpu' : 'wasm';
+}
