@@ -4,7 +4,9 @@ import { DepthInferenceClient, type DepthResult } from '../engine/inference/Dept
 import { FlowClient } from '../engine/flow/FlowClient';
 import { KeyframeScheduler, type KeyframeReason } from '../engine/scheduler/KeyframeScheduler';
 import { warpDepth } from '../engine/propagation/warpDepth';
-import { createDepthImageData, type DepthPalette } from '../effects/depthColor';
+import { applyAffine, fitRobustAffine, stabilizeDepth } from '../engine/fusion/depthFusion';
+import { DepthEffectRenderer, type EffectOptions, type LiveEffect } from '../effects/DepthEffectRenderer';
+import { createConfidenceImageData, createDepthImageData, type DepthPalette } from '../effects/depthColor';
 import { CAMERA_HEIGHT, CAMERA_WIDTH, describeCameraError, listVideoInputs, startCamera, stopMediaStream } from './camera';
 
 interface LiveWorkspaceProps { preferredBackend: InferenceBackend }
@@ -22,6 +24,18 @@ interface Telemetry {
 
 const FLOW_WIDTH = 160;
 const FLOW_HEIGHT = 120;
+
+interface LatestDepth {
+  depth: Float32Array;
+  confidence: Float32Array;
+  width: number;
+  height: number;
+}
+
+function hexToRgb(hex: string): readonly [number, number, number] {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+}
 
 function formatMs(value: number): string {
   return value ? `${Math.round(value)} ms` : '—';
@@ -45,13 +59,17 @@ export function frameDifference(left: Uint8Array | null, right: Uint8Array): num
 export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const depthCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const effectCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const captureCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const flowCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const inferenceRef = useRef<DepthInferenceClient | null>(null);
   const flowRef = useRef<FlowClient | null>(null);
+  const effectRendererRef = useRef<DepthEffectRenderer | null>(null);
   const schedulerRef = useRef(new KeyframeScheduler());
-  const anchorRef = useRef<{ result: DepthResult; gray: Uint8Array } | null>(null);
+  const anchorRef = useRef<{ result: DepthResult; gray: Uint8Array; needsAlignment: boolean } | null>(null);
+  const latestDepthRef = useRef<LatestDepth | null>(null);
+  const transitionFrameRef = useRef(4);
   const previousGrayRef = useRef<Uint8Array | null>(null);
   const paletteRef = useRef<DepthPalette>('viridis');
   const manualRefreshRef = useRef(false);
@@ -59,7 +77,9 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const animationRef = useRef<number | null>(null);
   const cameraFramesRef = useRef<number[]>([]);
   const depthFramesRef = useRef<number[]>([]);
+  const lastCameraTelemetryRef = useRef(0);
   const latestSignalsRef = useRef({ motion: 0, lowConfidenceFraction: 0, sceneDifference: 0 });
+  const effectOptionsRef = useRef<EffectOptions>({ effect: 'depth', focusDepth: 0.55, aperture: 0.7, fogDensity: 0.55, fogColor: [0.55, 0.68, 0.67] });
 
   const [status, setStatus] = useState<'idle' | 'starting' | 'running' | 'error'>('idle');
   const [message, setMessage] = useState('Start the camera when you are ready. Permission is requested only after you click.');
@@ -68,21 +88,35 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const [interval, setIntervalValue] = useState(5);
   const [palette, setPalette] = useState<DepthPalette>('viridis');
   const [hasDepth, setHasDepth] = useState(false);
+  const [effect, setEffect] = useState<LiveEffect>('depth');
+  const [focusDepth, setFocusDepth] = useState(0.55);
+  const [aperture, setAperture] = useState(0.7);
+  const [fogDensity, setFogDensity] = useState(0.55);
+  const [fogColor, setFogColor] = useState('#8badaa');
   const [telemetry, setTelemetry] = useState<Telemetry>({ cameraFps: 0, depthFps: 0, inferenceMs: 0, flowMs: 0, motion: 0, lowConfidence: 0, calls: 0, reason: null });
 
   useEffect(() => {
     inferenceRef.current = new DepthInferenceClient();
     flowRef.current = new FlowClient();
+    try {
+      if (effectCanvasRef.current) effectRendererRef.current = new DepthEffectRenderer(effectCanvasRef.current);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Live effects could not be initialized.');
+    }
     return () => {
       activeRef.current = false;
       if (animationRef.current !== null) cancelAnimationFrame(animationRef.current);
       stopMediaStream(streamRef.current);
       inferenceRef.current?.dispose();
       flowRef.current?.dispose();
+      effectRendererRef.current?.dispose();
     };
   }, []);
 
   useEffect(() => { paletteRef.current = palette; }, [palette]);
+  useEffect(() => {
+    effectOptionsRef.current = { effect, focusDepth, aperture, fogDensity, fogColor: hexToRgb(fogColor) };
+  }, [aperture, effect, focusDepth, fogColor, fogDensity]);
 
   async function beginCamera(selectedDeviceId = deviceId): Promise<void> {
     setStatus('starting');
@@ -146,7 +180,14 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         if (anchorRef.current && flowRef.current && !flowRef.current.busy) {
           void runFlow(gray.slice(), timestamp);
         }
-        setTelemetry((current) => ({ ...current, cameraFps: cameraFramesRef.current.length }));
+        const latest = latestDepthRef.current;
+        if (latest && effectOptionsRef.current.effect !== 'depth' && effectOptionsRef.current.effect !== 'confidence') {
+          effectRendererRef.current?.render(video, latest.depth, latest.width, latest.height, effectOptionsRef.current);
+        }
+        if (timestamp - lastCameraTelemetryRef.current >= 500) {
+          lastCameraTelemetryRef.current = timestamp;
+          setTelemetry((current) => ({ ...current, cameraFps: cameraFramesRef.current.length }));
+        }
       }
     }
     scheduleFrame();
@@ -167,7 +208,8 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     setMessage(`Depth refresh (${reason}) is running in the background…`);
     try {
       const result = await client.estimate(pixels, width, height, preferredBackend, setMessage);
-      anchorRef.current = { result, gray };
+      anchorRef.current = { result, gray, needsAlignment: latestDepthRef.current !== null };
+      transitionFrameRef.current = 0;
       schedulerRef.current.complete();
       setTelemetry((current) => ({ ...current, inferenceMs: result.inferenceMs, calls: current.calls + 1, reason }));
       setMessage('Live depth is tracking the camera between model refreshes.');
@@ -184,12 +226,28 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     try {
       const flow = await client.compute(gray, anchor.gray.slice(), FLOW_WIDTH, FLOW_HEIGHT);
       const warped = warpDepth(anchor.result.depth, anchor.result.width, anchor.result.height, flow.flow, flow.confidence, flow.width, flow.height);
+      let candidateDepth = warped.depth;
+      const previous = latestDepthRef.current;
+      if (anchor.needsAlignment && previous && previous.depth.length === candidateDepth.length) {
+        const fit = fitRobustAffine(candidateDepth, previous.depth, warped.confidence);
+        anchor.result.depth = applyAffine(anchor.result.depth, fit);
+        candidateDepth = applyAffine(candidateDepth, fit);
+        anchor.needsAlignment = false;
+      } else if (anchor.needsAlignment) {
+        anchor.needsAlignment = false;
+      }
+      transitionFrameRef.current = Math.min(4, transitionFrameRef.current + 1);
+      const stabilized = stabilizeDepth(candidateDepth, previous?.depth ?? null, warped.confidence, transitionFrameRef.current / 4, flow.meanMagnitude);
+      latestDepthRef.current = { depth: stabilized, confidence: warped.confidence, width: anchor.result.width, height: anchor.result.height };
       const canvas = depthCanvasRef.current;
       const context = canvas?.getContext('2d');
       if (canvas && context) {
         canvas.width = anchor.result.width;
         canvas.height = anchor.result.height;
-        context.putImageData(createDepthImageData(warped.depth, canvas.width, canvas.height, paletteRef.current), 0, 0);
+        const image = effectOptionsRef.current.effect === 'confidence'
+          ? createConfidenceImageData(warped.confidence, canvas.width, canvas.height)
+          : createDepthImageData(stabilized, canvas.width, canvas.height, paletteRef.current);
+        context.putImageData(image, 0, 0);
         setHasDepth(true);
       }
       latestSignalsRef.current = { ...latestSignalsRef.current, motion: flow.meanMagnitude, lowConfidenceFraction: flow.lowConfidenceFraction };
@@ -202,12 +260,29 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   }
 
   function saveSnapshot(): void {
-    const canvas = depthCanvasRef.current;
+    const liveEffect = effectOptionsRef.current.effect;
+    const canvas = liveEffect === 'bokeh' || liveEffect === 'fog' ? effectCanvasRef.current : depthCanvasRef.current;
     if (!canvas || canvas.width === 0) return;
     const link = document.createElement('a');
     link.download = `depthguide-${Date.now()}.png`;
     link.href = canvas.toDataURL('image/png');
     link.click();
+  }
+
+  function refocus(event: React.PointerEvent<HTMLCanvasElement>): void {
+    const latest = latestDepthRef.current;
+    if (!latest) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const centerX = Math.floor(((event.clientX - bounds.left) / bounds.width) * latest.width);
+    const centerY = Math.floor(((event.clientY - bounds.top) / bounds.height) * latest.height);
+    let sum = 0;
+    let samples = 0;
+    for (let y = centerY - 2; y <= centerY + 2; y += 1) {
+      for (let x = centerX - 2; x <= centerX + 2; x += 1) {
+        if (x >= 0 && y >= 0 && x < latest.width && y < latest.height) { sum += latest.depth[y * latest.width + x]; samples += 1; }
+      }
+    }
+    if (samples) setFocusDepth(sum / samples);
   }
 
   return (
@@ -216,12 +291,16 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         <div><small>LIVE CAMERA</small><strong>{status === 'running' ? 'Local stream active' : 'Camera is off'}</strong></div>
         <label>CAMERA<select disabled={status === 'starting'} value={deviceId} onChange={(event) => { setDeviceId(event.target.value); if (status === 'running') void beginCamera(event.target.value); }}><option value="">Default camera</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
         <label>KEYFRAME<select value={interval} onChange={(event) => { const value = Number(event.target.value); setIntervalValue(value); schedulerRef.current.setInterval(value); }}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>Every {value} frames</option>)}</select></label>
+        <label>VIEW<select value={effect} onChange={(event) => setEffect(event.target.value as LiveEffect)}><option value="depth">Depth</option><option value="confidence">Confidence</option><option value="bokeh">Cinematic bokeh</option><option value="fog">Depth fog</option></select></label>
         <label>PALETTE<select value={palette} onChange={(event) => setPalette(event.target.value as DepthPalette)}><option value="viridis">Viridis</option><option value="turbo">Turbo</option><option value="luma">Greyscale</option></select></label>
         {status === 'running' ? <button className="secondary-button" type="button" onClick={stopCamera}>Stop</button> : <button className="primary-button compact" disabled={status === 'starting'} type="button" onClick={() => void beginCamera()}>Start camera <b>→</b></button>}
       </div>
+      {(effect === 'bokeh' || effect === 'fog') && <div className="effect-controls">
+        {effect === 'bokeh' ? <><label>FOCUS <input aria-label="Focus depth" max="1" min="0" onChange={(event) => setFocusDepth(Number(event.target.value))} step="0.01" type="range" value={focusDepth} /><output>{focusDepth.toFixed(2)}</output></label><label>APERTURE <input aria-label="Aperture" max="1" min="0.1" onChange={(event) => setAperture(Number(event.target.value))} step="0.05" type="range" value={aperture} /><output>{aperture.toFixed(2)}</output></label><span>Click the effect to refocus</span></> : <><label>DENSITY <input aria-label="Fog density" max="1" min="0" onChange={(event) => setFogDensity(Number(event.target.value))} step="0.05" type="range" value={fogDensity} /><output>{fogDensity.toFixed(2)}</output></label><label>COLOUR <input aria-label="Fog colour" onChange={(event) => setFogColor(event.target.value)} type="color" value={fogColor} /></label></>}
+      </div>}
       <div className="live-grid">
         <figure><figcaption><span>01</span> CAMERA</figcaption><video ref={videoRef} autoPlay muted playsInline /></figure>
-        <figure><figcaption><span>02</span> PROPAGATED DEPTH</figcaption><canvas ref={depthCanvasRef} />{!hasDepth && <div className={status === 'running' ? 'live-placeholder running' : 'live-placeholder'}><span>{status === 'running' ? 'DEPTH INITIALIZING' : 'CAMERA WAITING'}</span></div>}</figure>
+        <figure><figcaption><span>02</span> {effect === 'depth' ? 'STABLE DEPTH' : effect === 'confidence' ? 'FLOW CONFIDENCE' : effect.toUpperCase()}</figcaption><canvas className={effect === 'depth' || effect === 'confidence' ? 'active-output' : 'hidden-output'} ref={depthCanvasRef} /><canvas aria-label="Live depth effect" className={effect === 'bokeh' || effect === 'fog' ? 'active-output effect-output' : 'hidden-output'} onPointerDown={refocus} ref={effectCanvasRef} />{!hasDepth && <div className={status === 'running' ? 'live-placeholder running' : 'live-placeholder'}><span>{status === 'running' ? 'DEPTH INITIALIZING' : 'CAMERA WAITING'}</span></div>}</figure>
       </div>
       <div className="live-footer">
         <div className={`result-status ${status === 'error' ? 'error' : status === 'running' ? 'ready' : ''}`}><i />{message}</div>

@@ -37,6 +37,14 @@ export class KeyframeScheduler {
 
   beginFrame(signals: FrameSignals, manual = false): KeyframeReason | null {
     this.framesSinceKeyframe += 1;
+    if (this.inferenceRunning) {
+      if (manual) this.pendingReason = 'manual';
+      else if (signals.sceneDifference >= this.options.sceneThreshold) this.pendingReason = 'scene-change';
+      else if (signals.lowConfidenceFraction >= this.options.confidenceThreshold) this.pendingReason = 'confidence';
+      else if (signals.motion >= this.options.motionThreshold) this.pendingReason = 'motion';
+      else if (this.framesSinceKeyframe >= this.options.interval) this.pendingReason = 'interval';
+      return null;
+    }
     let reason: KeyframeReason | null = null;
     if (manual) reason = 'manual';
     else if (!this.hasKeyframe) reason = 'initial';
@@ -44,10 +52,6 @@ export class KeyframeScheduler {
     else if (signals.lowConfidenceFraction >= this.options.confidenceThreshold) reason = 'confidence';
     else if (signals.motion >= this.options.motionThreshold) reason = 'motion';
     else if (this.framesSinceKeyframe >= this.options.interval) reason = 'interval';
-    if (this.inferenceRunning) {
-      if (reason && reason !== 'initial') this.pendingReason = reason;
-      return null;
-    }
     reason = this.pendingReason ?? reason;
     this.pendingReason = null;
     if (reason) this.inferenceRunning = true;
