@@ -37,4 +37,12 @@ describe('KeyframeScheduler', () => {
     scheduler.complete();
     expect(scheduler.beginFrame(quiet, true)).toBe('manual');
   });
+
+  it('queues a trigger that occurs while inference is busy', () => {
+    const scheduler = new KeyframeScheduler();
+    scheduler.beginFrame(quiet);
+    expect(scheduler.beginFrame({ ...quiet, sceneDifference: 0.4 })).toBeNull();
+    scheduler.complete();
+    expect(scheduler.beginFrame(quiet)).toBe('scene-change');
+  });
 });

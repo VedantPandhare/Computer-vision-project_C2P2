@@ -26,7 +26,7 @@ function command(method, params = {}) {
 }
 async function evaluate(expression) {
   const result = await command('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text);
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
   return result.result.value;
 }
 
@@ -34,7 +34,13 @@ await command('Runtime.enable');
 await command('Page.enable');
 await command('Page.reload', { ignoreCache: true });
 await new Promise((resolve) => setTimeout(resolve, 1_500));
-await evaluate(`([...document.querySelectorAll('button')].find((button) => button.textContent.includes('Start camera'))).click()`);
+await evaluate(`(() => {
+  const live = [...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Live');
+  live?.click();
+  const start = [...document.querySelectorAll('button')].find((button) => button.textContent.includes('Start camera'));
+  if (!start) throw new Error('Start camera button was not found.');
+  start.click();
+})()`);
 
 const deadline = Date.now() + 180_000;
 let state;

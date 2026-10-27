@@ -25,6 +25,7 @@ export class KeyframeScheduler {
   private hasKeyframe = false;
   private inferenceRunning = false;
   private framesSinceKeyframe = 0;
+  private pendingReason: KeyframeReason | null = null;
 
   constructor(options: Partial<SchedulerOptions> = {}) {
     this.options = { ...DEFAULTS, ...options };
@@ -36,7 +37,6 @@ export class KeyframeScheduler {
 
   beginFrame(signals: FrameSignals, manual = false): KeyframeReason | null {
     this.framesSinceKeyframe += 1;
-    if (this.inferenceRunning) return null;
     let reason: KeyframeReason | null = null;
     if (manual) reason = 'manual';
     else if (!this.hasKeyframe) reason = 'initial';
@@ -44,6 +44,12 @@ export class KeyframeScheduler {
     else if (signals.lowConfidenceFraction >= this.options.confidenceThreshold) reason = 'confidence';
     else if (signals.motion >= this.options.motionThreshold) reason = 'motion';
     else if (this.framesSinceKeyframe >= this.options.interval) reason = 'interval';
+    if (this.inferenceRunning) {
+      if (reason && reason !== 'initial') this.pendingReason = reason;
+      return null;
+    }
+    reason = this.pendingReason ?? reason;
+    this.pendingReason = null;
     if (reason) this.inferenceRunning = true;
     return reason;
   }

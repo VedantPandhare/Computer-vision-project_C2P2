@@ -3,7 +3,7 @@
 import * as ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from '../../../../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
 import { MODEL_CONFIG } from './modelConfig';
-import { calculateModelSize, normalizeDepth } from './depthMath';
+import { calculateModelSize, RunningDepthNormalizer } from './depthMath';
 import type {
   InferenceBackend,
   InferenceWorkerRequest,
@@ -18,6 +18,7 @@ ort.env.wasm.proxy = false;
 ort.env.wasm.wasmPaths = { wasm: new URL(ortWasmUrl, workerScope.location.href).href };
 let session: ort.InferenceSession | null = null;
 let sessionBackend: InferenceBackend | null = null;
+const depthNormalizer = new RunningDepthNormalizer();
 
 function respond(message: InferenceWorkerResponse): void {
   workerScope.postMessage(message);
@@ -157,7 +158,7 @@ async function estimateDepth(
   const dims = output.dims;
   const height = Number(dims.at(-2) ?? modelHeight);
   const width = Number(dims.at(-1) ?? modelWidth);
-  const depth = normalizeDepth(output.data);
+  const depth = depthNormalizer.normalize(output.data);
 
   const response: InferenceWorkerResponse = {
     type: 'estimate-result',

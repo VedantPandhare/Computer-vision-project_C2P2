@@ -24,6 +24,28 @@ function percentile(sorted: Float32Array, fraction: number): number {
   return sorted[index] ?? 0;
 }
 
+export class RunningDepthNormalizer {
+  private low: number | null = null;
+  private high: number | null = null;
+
+  constructor(private readonly smoothing = 0.18) {}
+
+  normalize(values: Float32Array, lowPercentile = 0.02, highPercentile = 0.98): Float32Array {
+    if (values.length === 0) return new Float32Array();
+    const finite = Float32Array.from(values.filter(Number.isFinite));
+    if (finite.length === 0) return new Float32Array(values.length);
+    finite.sort();
+    const measuredLow = percentile(finite, lowPercentile);
+    const measuredHigh = percentile(finite, highPercentile);
+    this.low = this.low === null ? measuredLow : this.low * (1 - this.smoothing) + measuredLow * this.smoothing;
+    this.high = this.high === null ? measuredHigh : this.high * (1 - this.smoothing) + measuredHigh * this.smoothing;
+    const range = this.high - this.low;
+    if (range <= Number.EPSILON) return new Float32Array(values.length);
+    const low = this.low;
+    return Float32Array.from(values, (value) => Number.isFinite(value) ? Math.min(1, Math.max(0, (value - low) / range)) : 0);
+  }
+}
+
 export function normalizeDepth(
   values: Float32Array,
   lowPercentile = 0.02,

@@ -58,3 +58,16 @@ export function createDepthImageData(
   }
   return new ImageData(pixels, width, height);
 }
+
+export function createConfidenceImageData(confidence: Float32Array, width: number, height: number): ImageData {
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let index = 0; index < confidence.length; index += 1) {
+    const value = Math.min(1, Math.max(0, confidence[index]));
+    const pixelIndex = index * 4;
+    pixels[pixelIndex] = Math.round((1 - value) * 232);
+    pixels[pixelIndex + 1] = Math.round(value * 232);
+    pixels[pixelIndex + 2] = 82;
+    pixels[pixelIndex + 3] = 255;
+  }
+  return new ImageData(pixels, width, height);
+}
