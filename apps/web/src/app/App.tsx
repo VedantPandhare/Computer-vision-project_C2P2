@@ -4,6 +4,7 @@ import type { AppMode, CapabilityReport, FeasibilityResult } from './types';
 import { MODEL_CONFIG } from '../engine/inference/modelConfig';
 import { runFeasibilityProbe } from '../engine/inference/runFeasibilityProbe';
 import { PhotoWorkspace } from '../capture/PhotoWorkspace';
+import { LiveWorkspace } from '../capture/LiveWorkspace';
 
 const MODES: AppMode[] = ['Live', 'Photo', 'Inspect', 'Compare', 'Benchmark', 'About'];
 
@@ -103,9 +104,11 @@ export function App() {
           </div>
         </section>
 
-        <section className={mode === 'Photo' ? 'workspace photo-mode' : 'workspace'} aria-label={`${mode} workspace`}>
+        <section className={mode === 'Photo' ? 'workspace photo-mode' : mode === 'Live' ? 'workspace live-mode' : 'workspace'} aria-label={`${mode} workspace`}>
           <div className="canvas-card">
-            {mode === 'Photo' ? (
+            {mode === 'Live' ? (
+              <LiveWorkspace preferredBackend={preferredBackend} />
+            ) : mode === 'Photo' ? (
               <PhotoWorkspace preferredBackend={preferredBackend} />
             ) : (
               <>
@@ -123,7 +126,7 @@ export function App() {
                   <div className="stage-copy">
                     <span>INPUT WAITING</span>
                     <strong>{mode} mode foundation is ready.</strong>
-                    <small>{mode === 'Live' ? 'Camera capture arrives in Step 3.' : 'This mode will be activated in a later step.'}</small>
+                    <small>This mode will be activated in a later step.</small>
                   </div>
                 </div>
                 <div className="depth-scale" aria-label="Depth scale from far to near">
