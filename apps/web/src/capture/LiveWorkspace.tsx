@@ -10,11 +10,10 @@ import { createConfidenceImageData, createDepthImageData, type DepthPalette } fr
 import { CAMERA_HEIGHT, CAMERA_WIDTH, describeCameraError, listVideoInputs, startCamera, stopMediaStream } from './camera';
 import { TelemetryStore } from '../telemetry/TelemetryStore';
 import { TelemetryPanel } from '../telemetry/TelemetryPanel';
+import { QUALITY_PROFILES, type QualityProfileId } from '../engine/inference/modelConfig';
+import { AdaptiveIntervalController } from '../engine/scheduler/AdaptiveIntervalController';
 
 interface LiveWorkspaceProps { preferredBackend: InferenceBackend }
-
-const FLOW_WIDTH = 160;
-const FLOW_HEIGHT = 120;
 
 interface LatestDepth {
   depth: Float32Array;
@@ -69,12 +68,18 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const frameIdRef = useRef(0);
   const latestInferenceMsRef = useRef(0);
   const intervalRef = useRef(5);
+  const profileRef = useRef(QUALITY_PROFILES.balanced);
+  const profileGenerationRef = useRef(0);
+  const adaptiveRef = useRef(true);
+  const adaptiveControllerRef = useRef(new AdaptiveIntervalController(5));
 
   const [status, setStatus] = useState<'idle' | 'starting' | 'running' | 'error'>('idle');
   const [message, setMessage] = useState('Start the camera when you are ready. Permission is requested only after you click.');
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [interval, setIntervalValue] = useState(5);
+  const [profileId, setProfileId] = useState<QualityProfileId>('balanced');
+  const [adaptive, setAdaptive] = useState(true);
   const [palette, setPalette] = useState<DepthPalette>('viridis');
   const [hasDepth, setHasDepth] = useState(false);
   const [effect, setEffect] = useState<LiveEffect>('depth');
@@ -156,10 +161,12 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     if (video?.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA && flowCanvas) {
       const context = flowCanvas.getContext('2d', { willReadFrequently: true });
       if (context) {
+        const { flowWidth, flowHeight } = profileRef.current;
+        if (flowCanvas.width !== flowWidth || flowCanvas.height !== flowHeight) { flowCanvas.width = flowWidth; flowCanvas.height = flowHeight; }
         frameIdRef.current += 1;
         telemetryStoreRef.current.recordCameraFrame(timestamp);
-        context.drawImage(video, 0, 0, FLOW_WIDTH, FLOW_HEIGHT);
-        const gray = toGray(context.getImageData(0, 0, FLOW_WIDTH, FLOW_HEIGHT).data);
+        context.drawImage(video, 0, 0, flowWidth, flowHeight);
+        const gray = toGray(context.getImageData(0, 0, flowWidth, flowHeight).data);
         const sceneDifference = frameDifference(previousGrayRef.current, gray);
         previousGrayRef.current = gray.slice();
         const signals = { ...latestSignalsRef.current, sceneDifference };
@@ -176,7 +183,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         if (timestamp - lastCameraTelemetryRef.current >= 500) {
           lastCameraTelemetryRef.current = timestamp;
           telemetryStoreRef.current.recordSchedulerState(intervalRef.current, schedulerRef.current.age, latestSignalsRef.current.motion, latestSignalsRef.current.lowConfidenceFraction);
-          telemetryStoreRef.current.recordBackendInfo(preferredBackend, 'base');
+          telemetryStoreRef.current.recordBackendInfo(preferredBackend, profileRef.current.label);
           setTelemetrySnapshot(telemetryStoreRef.current.snapshot());
         }
       }
@@ -188,6 +195,8 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     const canvas = captureCanvasRef.current;
     const client = inferenceRef.current;
     const requestFrameId = frameIdRef.current;
+    const requestGeneration = profileGenerationRef.current;
+    const requestProfile = profileRef.current.id;
     if (!canvas || !client) { schedulerRef.current.fail(); return; }
     const width = video.videoWidth || CAMERA_WIDTH;
     const height = video.videoHeight || CAMERA_HEIGHT;
@@ -199,7 +208,12 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     const pixels = context.getImageData(0, 0, width, height).data;
     setMessage(`Depth refresh (${reason}) is running in the background…`);
     try {
-      const result = await client.estimate(pixels, width, height, preferredBackend, setMessage);
+      const result = await client.estimate(pixels, width, height, preferredBackend, setMessage, requestProfile);
+      if (requestGeneration !== profileGenerationRef.current) {
+        schedulerRef.current.complete();
+        manualRefreshRef.current = true;
+        return;
+      }
       latestInferenceMsRef.current = result.inferenceMs;
       anchorRef.current = { result, gray, needsAlignment: latestDepthRef.current !== null };
       transitionFrameRef.current = 0;
@@ -217,7 +231,8 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     const client = flowRef.current;
     if (!anchor || !client) return;
     try {
-      const flow = await client.compute(gray, anchor.gray.slice(), FLOW_WIDTH, FLOW_HEIGHT);
+      const { flowWidth, flowHeight } = profileRef.current;
+      const flow = await client.compute(gray, anchor.gray.slice(), flowWidth, flowHeight);
       const warpStarted = performance.now();
       const warped = warpDepth(anchor.result.depth, anchor.result.width, anchor.result.height, flow.flow, flow.confidence, flow.width, flow.height);
       const warpMs = performance.now() - warpStarted;
@@ -248,6 +263,14 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         setHasDepth(true);
       }
       latestSignalsRef.current = { ...latestSignalsRef.current, motion: flow.meanMagnitude, lowConfidenceFraction: flow.lowConfidenceFraction };
+      if (adaptiveRef.current) {
+        const nextInterval = adaptiveControllerRef.current.update(latestSignalsRef.current, latestInferenceMsRef.current);
+        if (nextInterval !== intervalRef.current) {
+          intervalRef.current = nextInterval;
+          schedulerRef.current.setInterval(nextInterval);
+          setIntervalValue(nextInterval);
+        }
+      }
       telemetryStoreRef.current.recordDepthFrame(timestamp);
       telemetryStoreRef.current.recordRenderFrame(timestamp);
       telemetryStoreRef.current.recordFlicker(stabilized, warped.confidence);
@@ -283,12 +306,28 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     if (samples) setFocusDepth(sum / samples);
   }
 
+  function changeProfile(nextId: QualityProfileId): void {
+    const next = QUALITY_PROFILES[nextId];
+    profileRef.current = next;
+    profileGenerationRef.current += 1;
+    anchorRef.current = null;
+    manualRefreshRef.current = true;
+    setProfileId(nextId);
+    intervalRef.current = next.suggestedInterval;
+    adaptiveControllerRef.current.reset(next.suggestedInterval);
+    schedulerRef.current.setInterval(next.suggestedInterval);
+    setIntervalValue(next.suggestedInterval);
+    setMessage(`${next.label} profile selected. Preparing a matching keyframe…`);
+  }
+
   return (
     <div className="live-workspace">
       <div className="live-toolbar">
         <div><small>LIVE CAMERA</small><strong>{status === 'running' ? 'Local stream active' : 'Camera is off'}</strong></div>
         <label>CAMERA<select disabled={status === 'starting'} value={deviceId} onChange={(event) => { setDeviceId(event.target.value); if (status === 'running') void beginCamera(event.target.value); }}><option value="">Default camera</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
-        <label>KEYFRAME<select value={interval} onChange={(event) => { const value = Number(event.target.value); setIntervalValue(value); intervalRef.current = value; schedulerRef.current.setInterval(value); }}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>Every {value} frames</option>)}</select></label>
+        <label>PROFILE<select value={profileId} onChange={(event) => changeProfile(event.target.value as QualityProfileId)}>{Object.values(QUALITY_PROFILES).map((profile) => <option key={profile.id} value={profile.id}>{profile.label}</option>)}</select></label>
+        <label>KEYFRAME<select disabled={adaptive} value={interval} onChange={(event) => { const value = Number(event.target.value); setIntervalValue(value); intervalRef.current = value; adaptiveControllerRef.current.reset(value); schedulerRef.current.setInterval(value); }}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>Every {value} frames</option>)}</select></label>
+        <label className="adaptive-toggle"><input checked={adaptive} onChange={(event) => { adaptiveRef.current = event.target.checked; setAdaptive(event.target.checked); adaptiveControllerRef.current.reset(intervalRef.current); }} type="checkbox" /> ADAPTIVE</label>
         <label>VIEW<select value={effect} onChange={(event) => setEffect(event.target.value as LiveEffect)}><option value="depth">Depth</option><option value="confidence">Confidence</option><option value="bokeh">Cinematic bokeh</option><option value="fog">Depth fog</option></select></label>
         <label>PALETTE<select value={palette} onChange={(event) => setPalette(event.target.value as DepthPalette)}><option value="viridis">Viridis</option><option value="turbo">Turbo</option><option value="luma">Greyscale</option></select></label>
         {status === 'running' ? <button className="secondary-button" type="button" onClick={stopCamera}>Stop</button> : <button className="primary-button compact" disabled={status === 'starting'} type="button" onClick={() => void beginCamera()}>Start camera <b>→</b></button>}
@@ -305,7 +344,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         <div className="live-actions"><button className="secondary-button" disabled={status !== 'running'} onClick={() => { manualRefreshRef.current = true; }} type="button">Refresh depth</button><button className="secondary-button" onClick={saveSnapshot} type="button">Save depth PNG</button></div>
       </div>
       <TelemetryPanel snapshot={telemetrySnapshot} />
-      <canvas ref={captureCanvasRef} className="sr-only" /><canvas ref={flowCanvasRef} width={FLOW_WIDTH} height={FLOW_HEIGHT} className="sr-only" />
+      <canvas ref={captureCanvasRef} className="sr-only" /><canvas ref={flowCanvasRef} width={QUALITY_PROFILES.balanced.flowWidth} height={QUALITY_PROFILES.balanced.flowHeight} className="sr-only" />
     </div>
   );
 }

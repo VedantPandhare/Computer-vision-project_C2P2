@@ -2,7 +2,7 @@
 
 import * as ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from '../../../../../node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.asyncify.wasm?url';
-import { MODEL_CONFIG } from './modelConfig';
+import { MODEL_CONFIG, QUALITY_PROFILES, type QualityProfileId } from './modelConfig';
 import { calculateModelSize, RunningDepthNormalizer } from './depthMath';
 import type {
   InferenceBackend,
@@ -99,8 +99,9 @@ function imageToTensor(
   pixels: Uint8ClampedArray,
   sourceWidth: number,
   sourceHeight: number,
+  profile: QualityProfileId,
 ): { tensor: ort.Tensor; modelWidth: number; modelHeight: number } {
-  const { width: modelWidth, height: modelHeight } = calculateModelSize(sourceWidth, sourceHeight);
+  const { width: modelWidth, height: modelHeight } = calculateModelSize(sourceWidth, sourceHeight, QUALITY_PROFILES[profile].modelTarget);
   const sourceCanvas = new OffscreenCanvas(sourceWidth, sourceHeight);
   const sourceContext = sourceCanvas.getContext('2d');
   if (!sourceContext) throw new Error('The browser could not create an image source canvas.');
@@ -138,12 +139,13 @@ async function estimateDepth(
   sourceWidth: number,
   sourceHeight: number,
   preferredBackend: InferenceBackend,
+  profile: QualityProfileId,
 ): Promise<void> {
   respond({ type: 'progress', message: `Loading ${MODEL_CONFIG.label}…` });
   const { backend, loadMs } = await ensureSession(preferredBackend);
 
   respond({ type: 'progress', message: 'Preparing image pixels for the model…' });
-  const { tensor, modelWidth, modelHeight } = imageToTensor(pixels, sourceWidth, sourceHeight);
+  const { tensor, modelWidth, modelHeight } = imageToTensor(pixels, sourceWidth, sourceHeight, profile);
 
   if (!session) throw new Error('The inference session was not created.');
   respond({ type: 'progress', message: 'Estimating relative depth…' });
@@ -183,8 +185,8 @@ workerScope.addEventListener('message', (event: MessageEvent<InferenceWorkerRequ
   }
 
   if (event.data.type === 'estimate') {
-    const { pixels, width, height, preferredBackend } = event.data;
-    void estimateDepth(pixels, width, height, preferredBackend).catch((error: unknown) => {
+    const { pixels, width, height, preferredBackend, profile = 'quality' } = event.data;
+    void estimateDepth(pixels, width, height, preferredBackend, profile).catch((error: unknown) => {
       respond({
         type: 'error',
         message: error instanceof Error ? error.message : 'Unknown depth estimation error.',

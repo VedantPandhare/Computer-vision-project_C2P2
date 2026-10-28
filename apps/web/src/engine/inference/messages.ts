@@ -1,4 +1,5 @@
 export type InferenceBackend = 'webgpu' | 'wasm';
+import type { QualityProfileId } from './modelConfig';
 
 export type InferenceWorkerRequest =
   | { type: 'probe'; preferredBackend: InferenceBackend }
@@ -8,6 +9,7 @@ export type InferenceWorkerRequest =
       pixels: Uint8ClampedArray;
       width: number;
       height: number;
+      profile?: QualityProfileId;
     }
   | { type: 'dispose' };
 
