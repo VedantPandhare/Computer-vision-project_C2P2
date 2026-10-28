@@ -7,6 +7,8 @@ import { PhotoWorkspace } from '../capture/PhotoWorkspace';
 import { LiveWorkspace } from '../capture/LiveWorkspace';
 import { CompareWorkspace } from '../compare/CompareWorkspace';
 import { InspectWorkspace } from '../inspect/InspectWorkspace';
+import { BenchmarkWorkspace } from '../benchmark/BenchmarkWorkspace';
+import { AboutWorkspace } from '../about/AboutWorkspace';
 
 const MODES: AppMode[] = ['Live', 'Photo', 'Inspect', 'Compare', 'Benchmark', 'About'];
 
@@ -106,7 +108,7 @@ export function App() {
           </div>
         </section>
 
-        <section className={mode === 'Photo' ? 'workspace photo-mode' : mode === 'Live' ? 'workspace live-mode' : mode === 'Compare' ? 'workspace compare-mode' : mode === 'Inspect' ? 'workspace inspect-mode' : 'workspace'} aria-label={`${mode} workspace`}>
+        <section className={mode === 'Photo' ? 'workspace photo-mode' : mode === 'Live' ? 'workspace live-mode' : mode === 'Compare' ? 'workspace compare-mode' : mode === 'Inspect' ? 'workspace inspect-mode' : mode === 'Benchmark' ? 'workspace benchmark-mode' : mode === 'About' ? 'workspace about-mode' : 'workspace'} aria-label={`${mode} workspace`}>
           <div className="canvas-card">
             {mode === 'Live' ? (
               <LiveWorkspace preferredBackend={preferredBackend} />
@@ -116,10 +118,14 @@ export function App() {
               <CompareWorkspace preferredBackend={preferredBackend} />
             ) : mode === 'Inspect' ? (
               <InspectWorkspace preferredBackend={preferredBackend} />
+            ) : mode === 'Benchmark' ? (
+              <BenchmarkWorkspace preferredBackend={preferredBackend} />
+            ) : mode === 'About' ? (
+              <AboutWorkspace />
             ) : (
               <>
                 <div className="canvas-topline">
-                  <span>{mode.toUpperCase()} / PREVIEW</span>
+                  <span>MODE / PREVIEW</span>
                   <span>DEPTH 0.00—1.00</span>
                 </div>
                 <div className="depth-stage">
@@ -131,7 +137,7 @@ export function App() {
                   <div className="stage-label label-near">NEAR</div>
                   <div className="stage-copy">
                     <span>INPUT WAITING</span>
-                    <strong>{mode} mode foundation is ready.</strong>
+                    <strong>Mode foundation is ready.</strong>
                     <small>This mode will be activated in a later step.</small>
                   </div>
                 </div>
