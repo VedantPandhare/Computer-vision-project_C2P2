@@ -3,6 +3,7 @@ import type { DragEvent } from 'react';
 import type { InferenceBackend } from '../engine/inference/messages';
 import { DepthInferenceClient, type DepthResult } from '../engine/inference/DepthInferenceClient';
 import { createDepthImageData, type DepthPalette } from '../effects/depthColor';
+import { PhotoStudio, type PhotoStudioView } from '../effects/PhotoStudio';
 
 interface PhotoWorkspaceProps {
   preferredBackend: InferenceBackend;
@@ -29,6 +30,7 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
   const [result, setResult] = useState<DepthResult | null>(null);
   const [palette, setPalette] = useState<DepthPalette>('viridis');
   const [dragging, setDragging] = useState(false);
+  const [view, setView] = useState<PhotoStudioView>('depth');
 
   useEffect(() => {
     clientRef.current = new DepthInferenceClient();
@@ -171,8 +173,16 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
       <div className="result-toolbar">
         <div><small>PHOTO</small><strong>{fileName}</strong></div>
         <div className="palette-control">
+          <label htmlFor="photo-view">VIEW</label>
+          <select id="photo-view" onChange={(event) => setView(event.target.value as PhotoStudioView)} value={view}>
+            <option value="depth">Depth</option>
+            <option value="parallax">3D parallax</option>
+            <option value="point-cloud">Point cloud</option>
+          </select>
+        </div>
+        <div className="palette-control">
           <label htmlFor="palette">PALETTE</label>
-          <select id="palette" onChange={(event) => setPalette(event.target.value as DepthPalette)} value={palette}>
+          <select disabled={view !== 'depth'} id="palette" onChange={(event) => setPalette(event.target.value as DepthPalette)} value={palette}>
             <option value="viridis">Viridis</option>
             <option value="turbo">Turbo</option>
             <option value="luma">Greyscale</option>
@@ -198,8 +208,8 @@ export function PhotoWorkspace({ preferredBackend }: PhotoWorkspaceProps) {
           <img alt={`Uploaded source: ${fileName}`} src={sourceUrl} />
         </figure>
         <figure className="depth-result">
-          <figcaption><span>02</span> RELATIVE DEPTH</figcaption>
-          {status === 'ready' ? <canvas ref={canvasRef} aria-label="Estimated relative depth map" /> : <div className="processing-plate"><i /><strong>{message}</strong><small>The interface remains responsive while inference runs.</small></div>}
+          <figcaption><span>02</span> {view === 'depth' ? 'RELATIVE DEPTH' : view === 'parallax' ? '3D PARALLAX' : 'RELATIVE POINT CLOUD'}</figcaption>
+          {status === 'ready' ? <><canvas className={view === 'depth' ? 'photo-depth-canvas active' : 'photo-depth-canvas'} ref={canvasRef} aria-label="Estimated relative depth map" />{result && sourceUrl && <PhotoStudio result={result} sourceUrl={sourceUrl} view={view} />}</> : <div className="processing-plate"><i /><strong>{message}</strong><small>The interface remains responsive while inference runs.</small></div>}
         </figure>
       </div>
 
