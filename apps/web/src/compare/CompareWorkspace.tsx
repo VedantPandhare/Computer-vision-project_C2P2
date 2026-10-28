@@ -65,6 +65,8 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
   const previousGuideRef = useRef<Float32Array | null>(null);
   const activeRef = useRef(false);
   const inferenceBusyRef = useRef(false);
+  const requestInferenceRef = useRef(false);
+  const sessionIdRef = useRef(0);
   const animationRef = useRef<number | null>(null);
   const cameraTicksRef = useRef<number[]>([]);
   const naiveTicksRef = useRef<number[]>([]);
@@ -77,6 +79,9 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [metrics, setMetrics] = useState(metricsRef.current);
+  const [modelBusy, setModelBusy] = useState(false);
+  const [hasNaive, setHasNaive] = useState(false);
+  const [hasGuide, setHasGuide] = useState(false);
 
   useEffect(() => {
     inferenceRef.current = new DepthInferenceClient();
@@ -90,10 +95,29 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
     };
   }, []);
 
+  function resetWorkers(): void {
+    sessionIdRef.current += 1;
+    inferenceRef.current?.dispose();
+    flowRef.current?.dispose();
+    inferenceRef.current = new DepthInferenceClient();
+    flowRef.current = new FlowClient();
+    inferenceBusyRef.current = false;
+    setModelBusy(false);
+    anchorRef.current = null;
+    previousNaiveRef.current = null;
+    previousGuideRef.current = null;
+  }
+
   async function beginCamera(selectedDeviceId = deviceId): Promise<void> {
     activeRef.current = false;
     if (animationRef.current !== null) cancelAnimationFrame(animationRef.current);
     stopMediaStream(streamRef.current);
+    resetWorkers();
+    requestInferenceRef.current = true;
+    setHasNaive(false);
+    setHasGuide(false);
+    metricsRef.current = { cameraFps: 0, naiveFps: 0, guideFps: 0, modelCalls: 0, inferenceMs: 0, flowMs: 0, naiveJump: 0, guideJump: 0 };
+    setMetrics(metricsRef.current);
     setStatus('starting');
     setMessage('Requesting camera access…');
     try {
@@ -122,6 +146,7 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
     stopMediaStream(streamRef.current);
     streamRef.current = null;
     if (videoRef.current) videoRef.current.srcObject = null;
+    resetWorkers();
     setStatus('idle');
     setMessage('Comparison stopped. The last results remain visible.');
   }
@@ -139,7 +164,10 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
         const gray = grayscale(context.getImageData(0, 0, FLOW_WIDTH, FLOW_HEIGHT).data);
         cameraTicksRef.current.push(timestamp);
         cameraTicksRef.current = cameraTicksRef.current.filter((value) => timestamp - value <= 1000);
-        if (!inferenceBusyRef.current) void runNaiveInference(video, gray.slice());
+        if (requestInferenceRef.current && !inferenceBusyRef.current) {
+          requestInferenceRef.current = false;
+          void runNaiveInference(video, gray.slice());
+        }
         if (anchorRef.current && flowRef.current && !flowRef.current.busy) void runGuideFlow(gray.slice(), timestamp);
         if (timestamp - lastUiUpdateRef.current > 500) {
           lastUiUpdateRef.current = timestamp;
@@ -157,7 +185,9 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
     const client = inferenceRef.current;
     const canvas = captureRef.current;
     if (!client || !canvas) return;
+    const sessionId = sessionIdRef.current;
     inferenceBusyRef.current = true;
+    setModelBusy(true);
     const width = video.videoWidth || 640;
     const height = video.videoHeight || 480;
     canvas.width = width;
@@ -167,21 +197,28 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
     context.drawImage(video, 0, 0, width, height);
     const pixels = context.getImageData(0, 0, width, height).data;
     try {
-      const result = await client.estimate(pixels, width, height, preferredBackend, (progress) => setMessage(progress));
+      const result = await client.estimate(pixels, width, height, preferredBackend, (progress) => { if (sessionId === sessionIdRef.current) setMessage(progress); }, 'fast');
+      if (sessionId !== sessionIdRef.current) return;
       const jump = depthJump(result.depth, previousNaiveRef.current);
       previousNaiveRef.current = result.depth.slice();
       anchorRef.current = { result, gray };
       drawDepth(naiveCanvasRef.current, result.depth, result.width, result.height);
+      setHasNaive(true);
       const completedAt = performance.now();
       naiveTicksRef.current.push(completedAt);
       naiveTicksRef.current = naiveTicksRef.current.filter((value) => completedAt - value <= 1000);
       metricsRef.current = { ...metricsRef.current, modelCalls: metricsRef.current.modelCalls + 1, inferenceMs: result.inferenceMs, naiveJump: jump };
       setMessage('Naive updates only when the model finishes; DepthGuide keeps propagating between calls.');
     } catch (error) {
-      setStatus('error');
-      setMessage(error instanceof Error ? error.message : 'Comparison inference failed.');
+      if (sessionId === sessionIdRef.current) {
+        setStatus('running');
+        setMessage(error instanceof Error ? error.message : 'Comparison inference failed.');
+      }
     } finally {
-      inferenceBusyRef.current = false;
+      if (sessionId === sessionIdRef.current) {
+        inferenceBusyRef.current = false;
+        setModelBusy(false);
+      }
     }
   }
 
@@ -196,6 +233,7 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
       const jump = depthJump(stable, previousGuideRef.current);
       previousGuideRef.current = stable;
       drawDepth(guideCanvasRef.current, stable, anchor.result.width, anchor.result.height);
+      setHasGuide(true);
       guideTicksRef.current.push(timestamp);
       guideTicksRef.current = guideTicksRef.current.filter((value) => timestamp - value <= 1000);
       metricsRef.current = { ...metricsRef.current, flowMs: flow.elapsedMs, guideJump: jump };
@@ -209,12 +247,13 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
       <div className="compare-toolbar">
         <div><small>A/B COMPARISON</small><strong>Same frames, two update strategies</strong></div>
         <label>CAMERA<select value={deviceId} onChange={(event) => { setDeviceId(event.target.value); if (status === 'running') void beginCamera(event.target.value); }}><option value="">Default camera</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
+        {status === 'running' && <button className="secondary-button" disabled={modelBusy} onClick={() => { requestInferenceRef.current = true; setMessage('A new shared keyframe will be captured.'); }} type="button">Refresh keyframe</button>}
         {status === 'running' ? <button className="secondary-button" onClick={stop} type="button">Stop</button> : <button className="primary-button compact" disabled={status === 'starting'} onClick={() => void beginCamera()} type="button">Start comparison <b>→</b></button>}
       </div>
       <div className="compare-source"><video ref={videoRef} autoPlay muted playsInline /><p><strong>Shared input</strong><span>Both outputs receive frames from this exact stream. Model computation is shared so the comparison does not secretly double the workload.</span></p></div>
       <div className="compare-grid">
-        <figure><figcaption><span>A</span> NAIVE MODEL-ONLY <b>{metrics.naiveFps} depth fps</b></figcaption><canvas ref={naiveCanvasRef} /><div className="compare-metrics"><span>Inference {metrics.inferenceMs ? `${Math.round(metrics.inferenceMs)} ms` : '—'}</span><span>Update jump {metrics.naiveJump.toFixed(4)}</span></div></figure>
-        <figure><figcaption><span>B</span> DEPTHGUIDE PROPAGATION <b>{metrics.guideFps} depth fps</b></figcaption><canvas ref={guideCanvasRef} /><div className="compare-metrics"><span>Flow {metrics.flowMs ? `${Math.round(metrics.flowMs)} ms` : '—'}</span><span>Update jump {metrics.guideJump.toFixed(4)}</span></div></figure>
+        <figure><figcaption><span>A</span> MODEL-ONLY HOLD <b>{metrics.naiveFps} depth fps</b></figcaption><canvas ref={naiveCanvasRef} />{!hasNaive && <div className="compare-placeholder"><i className={modelBusy ? 'spinning' : ''} /><strong>{modelBusy ? 'MODEL KEYFRAME RUNNING' : 'WAITING FOR KEYFRAME'}</strong><small>This side changes only when the model finishes.</small></div>}<div className="compare-metrics"><span>Inference {metrics.inferenceMs ? `${Math.round(metrics.inferenceMs)} ms` : '—'}</span><span>Update jump {metrics.naiveJump.toFixed(4)}</span></div></figure>
+        <figure><figcaption><span>B</span> DEPTHGUIDE PROPAGATION <b>{metrics.guideFps} depth fps</b></figcaption><canvas ref={guideCanvasRef} />{!hasGuide && <div className="compare-placeholder"><i className={modelBusy ? 'spinning' : ''} /><strong>{modelBusy ? 'ANCHOR INITIALIZING' : 'WAITING FOR ANCHOR'}</strong><small>Propagation begins after the first shared keyframe.</small></div>}<div className="compare-metrics"><span>Flow {metrics.flowMs ? `${Math.round(metrics.flowMs)} ms` : '—'}</span><span>Update jump {metrics.guideJump.toFixed(4)}</span></div></figure>
       </div>
       <div className={`compare-status ${status}`}><i />{message}<span>Camera {metrics.cameraFps} fps · Model calls {metrics.modelCalls}</span></div>
       <canvas className="sr-only" ref={captureRef} /><canvas className="sr-only" height={FLOW_HEIGHT} ref={flowCaptureRef} width={FLOW_WIDTH} />
