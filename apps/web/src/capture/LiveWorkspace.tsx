@@ -8,19 +8,10 @@ import { applyAffine, fitRobustAffine, stabilizeDepth } from '../engine/fusion/d
 import { DepthEffectRenderer, type EffectOptions, type LiveEffect } from '../effects/DepthEffectRenderer';
 import { createConfidenceImageData, createDepthImageData, type DepthPalette } from '../effects/depthColor';
 import { CAMERA_HEIGHT, CAMERA_WIDTH, describeCameraError, listVideoInputs, startCamera, stopMediaStream } from './camera';
+import { TelemetryStore } from '../telemetry/TelemetryStore';
+import { TelemetryPanel } from '../telemetry/TelemetryPanel';
 
 interface LiveWorkspaceProps { preferredBackend: InferenceBackend }
-
-interface Telemetry {
-  cameraFps: number;
-  depthFps: number;
-  inferenceMs: number;
-  flowMs: number;
-  motion: number;
-  lowConfidence: number;
-  calls: number;
-  reason: KeyframeReason | null;
-}
 
 const FLOW_WIDTH = 160;
 const FLOW_HEIGHT = 120;
@@ -35,10 +26,6 @@ interface LatestDepth {
 function hexToRgb(hex: string): readonly [number, number, number] {
   const value = Number.parseInt(hex.slice(1), 16);
   return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
-}
-
-function formatMs(value: number): string {
-  return value ? `${Math.round(value)} ms` : '—';
 }
 
 function toGray(data: Uint8ClampedArray): Uint8Array {
@@ -75,11 +62,13 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const manualRefreshRef = useRef(false);
   const activeRef = useRef(false);
   const animationRef = useRef<number | null>(null);
-  const cameraFramesRef = useRef<number[]>([]);
-  const depthFramesRef = useRef<number[]>([]);
   const lastCameraTelemetryRef = useRef(0);
   const latestSignalsRef = useRef({ motion: 0, lowConfidenceFraction: 0, sceneDifference: 0 });
   const effectOptionsRef = useRef<EffectOptions>({ effect: 'depth', focusDepth: 0.55, aperture: 0.7, fogDensity: 0.55, fogColor: [0.55, 0.68, 0.67] });
+  const telemetryStoreRef = useRef(new TelemetryStore());
+  const frameIdRef = useRef(0);
+  const latestInferenceMsRef = useRef(0);
+  const intervalRef = useRef(5);
 
   const [status, setStatus] = useState<'idle' | 'starting' | 'running' | 'error'>('idle');
   const [message, setMessage] = useState('Start the camera when you are ready. Permission is requested only after you click.');
@@ -93,7 +82,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const [aperture, setAperture] = useState(0.7);
   const [fogDensity, setFogDensity] = useState(0.55);
   const [fogColor, setFogColor] = useState('#8badaa');
-  const [telemetry, setTelemetry] = useState<Telemetry>({ cameraFps: 0, depthFps: 0, inferenceMs: 0, flowMs: 0, motion: 0, lowConfidence: 0, calls: 0, reason: null });
+  const [telemetrySnapshot, setTelemetrySnapshot] = useState(() => telemetryStoreRef.current.snapshot());
 
   useEffect(() => {
     inferenceRef.current = new DepthInferenceClient();
@@ -167,12 +156,12 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     if (video?.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA && flowCanvas) {
       const context = flowCanvas.getContext('2d', { willReadFrequently: true });
       if (context) {
+        frameIdRef.current += 1;
+        telemetryStoreRef.current.recordCameraFrame(timestamp);
         context.drawImage(video, 0, 0, FLOW_WIDTH, FLOW_HEIGHT);
         const gray = toGray(context.getImageData(0, 0, FLOW_WIDTH, FLOW_HEIGHT).data);
         const sceneDifference = frameDifference(previousGrayRef.current, gray);
         previousGrayRef.current = gray.slice();
-        cameraFramesRef.current.push(timestamp);
-        cameraFramesRef.current = cameraFramesRef.current.filter((time) => timestamp - time <= 1000);
         const signals = { ...latestSignalsRef.current, sceneDifference };
         const reason = schedulerRef.current.beginFrame(signals, manualRefreshRef.current);
         manualRefreshRef.current = false;
@@ -186,7 +175,9 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         }
         if (timestamp - lastCameraTelemetryRef.current >= 500) {
           lastCameraTelemetryRef.current = timestamp;
-          setTelemetry((current) => ({ ...current, cameraFps: cameraFramesRef.current.length }));
+          telemetryStoreRef.current.recordSchedulerState(intervalRef.current, schedulerRef.current.age, latestSignalsRef.current.motion, latestSignalsRef.current.lowConfidenceFraction);
+          telemetryStoreRef.current.recordBackendInfo(preferredBackend, 'base');
+          setTelemetrySnapshot(telemetryStoreRef.current.snapshot());
         }
       }
     }
@@ -196,6 +187,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   async function runKeyframe(video: HTMLVideoElement, gray: Uint8Array, reason: KeyframeReason): Promise<void> {
     const canvas = captureCanvasRef.current;
     const client = inferenceRef.current;
+    const requestFrameId = frameIdRef.current;
     if (!canvas || !client) { schedulerRef.current.fail(); return; }
     const width = video.videoWidth || CAMERA_WIDTH;
     const height = video.videoHeight || CAMERA_HEIGHT;
@@ -208,10 +200,11 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     setMessage(`Depth refresh (${reason}) is running in the background…`);
     try {
       const result = await client.estimate(pixels, width, height, preferredBackend, setMessage);
+      latestInferenceMsRef.current = result.inferenceMs;
       anchorRef.current = { result, gray, needsAlignment: latestDepthRef.current !== null };
       transitionFrameRef.current = 0;
       schedulerRef.current.complete();
-      setTelemetry((current) => ({ ...current, inferenceMs: result.inferenceMs, calls: current.calls + 1, reason }));
+      telemetryStoreRef.current.recordKeyframe({ timestamp: performance.now(), frameId: requestFrameId, reason, inferenceMs: result.inferenceMs });
       setMessage('Live depth is tracking the camera between model refreshes.');
     } catch (error) {
       schedulerRef.current.fail();
@@ -225,7 +218,10 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     if (!anchor || !client) return;
     try {
       const flow = await client.compute(gray, anchor.gray.slice(), FLOW_WIDTH, FLOW_HEIGHT);
+      const warpStarted = performance.now();
       const warped = warpDepth(anchor.result.depth, anchor.result.width, anchor.result.height, flow.flow, flow.confidence, flow.width, flow.height);
+      const warpMs = performance.now() - warpStarted;
+      const fusionStarted = performance.now();
       let candidateDepth = warped.depth;
       const previous = latestDepthRef.current;
       if (anchor.needsAlignment && previous && previous.depth.length === candidateDepth.length) {
@@ -238,6 +234,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
       }
       transitionFrameRef.current = Math.min(4, transitionFrameRef.current + 1);
       const stabilized = stabilizeDepth(candidateDepth, previous?.depth ?? null, warped.confidence, transitionFrameRef.current / 4, flow.meanMagnitude);
+      const fusionMs = performance.now() - fusionStarted;
       latestDepthRef.current = { depth: stabilized, confidence: warped.confidence, width: anchor.result.width, height: anchor.result.height };
       const canvas = depthCanvasRef.current;
       const context = canvas?.getContext('2d');
@@ -251,9 +248,10 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         setHasDepth(true);
       }
       latestSignalsRef.current = { ...latestSignalsRef.current, motion: flow.meanMagnitude, lowConfidenceFraction: flow.lowConfidenceFraction };
-      depthFramesRef.current.push(timestamp);
-      depthFramesRef.current = depthFramesRef.current.filter((time) => timestamp - time <= 1000);
-      setTelemetry((current) => ({ ...current, depthFps: depthFramesRef.current.length, flowMs: flow.elapsedMs, motion: flow.meanMagnitude, lowConfidence: flow.lowConfidenceFraction }));
+      telemetryStoreRef.current.recordDepthFrame(timestamp);
+      telemetryStoreRef.current.recordRenderFrame(timestamp);
+      telemetryStoreRef.current.recordFlicker(stabilized, warped.confidence);
+      telemetryStoreRef.current.recordTimings({ flow: flow.elapsedMs, warp: warpMs, fusion: fusionMs, inference: latestInferenceMsRef.current, total: flow.elapsedMs + warpMs + fusionMs }, timestamp);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Optical-flow propagation failed.');
     }
@@ -290,7 +288,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
       <div className="live-toolbar">
         <div><small>LIVE CAMERA</small><strong>{status === 'running' ? 'Local stream active' : 'Camera is off'}</strong></div>
         <label>CAMERA<select disabled={status === 'starting'} value={deviceId} onChange={(event) => { setDeviceId(event.target.value); if (status === 'running') void beginCamera(event.target.value); }}><option value="">Default camera</option>{devices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}</select></label>
-        <label>KEYFRAME<select value={interval} onChange={(event) => { const value = Number(event.target.value); setIntervalValue(value); schedulerRef.current.setInterval(value); }}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>Every {value} frames</option>)}</select></label>
+        <label>KEYFRAME<select value={interval} onChange={(event) => { const value = Number(event.target.value); setIntervalValue(value); intervalRef.current = value; schedulerRef.current.setInterval(value); }}>{[2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>Every {value} frames</option>)}</select></label>
         <label>VIEW<select value={effect} onChange={(event) => setEffect(event.target.value as LiveEffect)}><option value="depth">Depth</option><option value="confidence">Confidence</option><option value="bokeh">Cinematic bokeh</option><option value="fog">Depth fog</option></select></label>
         <label>PALETTE<select value={palette} onChange={(event) => setPalette(event.target.value as DepthPalette)}><option value="viridis">Viridis</option><option value="turbo">Turbo</option><option value="luma">Greyscale</option></select></label>
         {status === 'running' ? <button className="secondary-button" type="button" onClick={stopCamera}>Stop</button> : <button className="primary-button compact" disabled={status === 'starting'} type="button" onClick={() => void beginCamera()}>Start camera <b>→</b></button>}
@@ -306,9 +304,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         <div className={`result-status ${status === 'error' ? 'error' : status === 'running' ? 'ready' : ''}`}><i />{message}</div>
         <div className="live-actions"><button className="secondary-button" disabled={status !== 'running'} onClick={() => { manualRefreshRef.current = true; }} type="button">Refresh depth</button><button className="secondary-button" onClick={saveSnapshot} type="button">Save depth PNG</button></div>
       </div>
-      <dl className="telemetry-strip">
-        <div><dt>Camera</dt><dd>{telemetry.cameraFps} fps</dd></div><div><dt>Depth display</dt><dd>{telemetry.depthFps} fps</dd></div><div><dt>Inference</dt><dd>{formatMs(telemetry.inferenceMs)}</dd></div><div><dt>Optical flow</dt><dd>{formatMs(telemetry.flowMs)}</dd></div><div><dt>Motion</dt><dd>{telemetry.motion.toFixed(2)} px</dd></div><div><dt>Low confidence</dt><dd>{Math.round(telemetry.lowConfidence * 100)}%</dd></div><div><dt>Keyframe age</dt><dd>{schedulerRef.current.age} frames</dd></div><div><dt>Model calls</dt><dd>{telemetry.calls}</dd></div>
-      </dl>
+      <TelemetryPanel snapshot={telemetrySnapshot} />
       <canvas ref={captureCanvasRef} className="sr-only" /><canvas ref={flowCanvasRef} width={FLOW_WIDTH} height={FLOW_HEIGHT} className="sr-only" />
     </div>
   );

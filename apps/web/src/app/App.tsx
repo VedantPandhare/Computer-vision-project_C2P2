@@ -5,6 +5,8 @@ import { MODEL_CONFIG } from '../engine/inference/modelConfig';
 import { runFeasibilityProbe } from '../engine/inference/runFeasibilityProbe';
 import { PhotoWorkspace } from '../capture/PhotoWorkspace';
 import { LiveWorkspace } from '../capture/LiveWorkspace';
+import { CompareWorkspace } from '../compare/CompareWorkspace';
+import { InspectWorkspace } from '../inspect/InspectWorkspace';
 
 const MODES: AppMode[] = ['Live', 'Photo', 'Inspect', 'Compare', 'Benchmark', 'About'];
 
@@ -104,12 +106,16 @@ export function App() {
           </div>
         </section>
 
-        <section className={mode === 'Photo' ? 'workspace photo-mode' : mode === 'Live' ? 'workspace live-mode' : 'workspace'} aria-label={`${mode} workspace`}>
+        <section className={mode === 'Photo' ? 'workspace photo-mode' : mode === 'Live' ? 'workspace live-mode' : mode === 'Compare' ? 'workspace compare-mode' : mode === 'Inspect' ? 'workspace inspect-mode' : 'workspace'} aria-label={`${mode} workspace`}>
           <div className="canvas-card">
             {mode === 'Live' ? (
               <LiveWorkspace preferredBackend={preferredBackend} />
             ) : mode === 'Photo' ? (
               <PhotoWorkspace preferredBackend={preferredBackend} />
+            ) : mode === 'Compare' ? (
+              <CompareWorkspace preferredBackend={preferredBackend} />
+            ) : mode === 'Inspect' ? (
+              <InspectWorkspace preferredBackend={preferredBackend} />
             ) : (
               <>
                 <div className="canvas-topline">

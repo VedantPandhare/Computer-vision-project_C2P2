@@ -97,10 +97,19 @@ export class DepthEffectRenderer {
 
   render(source: HTMLVideoElement, depth: Float32Array, depthWidth: number, depthHeight: number, options: EffectOptions): void {
     if (!source.videoWidth || !source.videoHeight) return;
+    this.renderShared(source, source.videoWidth, source.videoHeight, depth, depthWidth, depthHeight, options);
+  }
+
+  renderFromCanvas(source: HTMLCanvasElement, depth: Float32Array, depthWidth: number, depthHeight: number, options: EffectOptions): void {
+    if (!source.width || !source.height) return;
+    this.renderShared(source, source.width, source.height, depth, depthWidth, depthHeight, options);
+  }
+
+  private renderShared(source: TexImageSource, sourceWidth: number, sourceHeight: number, depth: Float32Array, depthWidth: number, depthHeight: number, options: EffectOptions): void {
     const gl = this.gl;
-    if (this.canvas.width !== source.videoWidth || this.canvas.height !== source.videoHeight) {
-      this.canvas.width = source.videoWidth;
-      this.canvas.height = source.videoHeight;
+    if (this.canvas.width !== sourceWidth || this.canvas.height !== sourceHeight) {
+      this.canvas.width = sourceWidth;
+      this.canvas.height = sourceHeight;
     }
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.useProgram(this.program);
