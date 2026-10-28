@@ -1,0 +1,10 @@
+# Isolated export environment for the Inspect explainability graph.
+torch==2.14.0
+transformers==5.12.1
+onnx==1.23.2
+onnxscript==0.7.2
+onnxruntime==1.27.0
+numpy==2.5.4
+pillow==10.3.0
+safetensors==0.5.2
+huggingface-hub==1.21.0

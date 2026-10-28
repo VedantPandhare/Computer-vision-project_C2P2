@@ -16,7 +16,7 @@ export function AboutWorkspace() {
 
       <section className="about-columns">
         <article><small>PROJECT SCOPE</small><h3>Application engineering, not model research</h3><ul><li>Uses an existing pretrained model.</li><li>No training or fine-tuning.</li><li>No model-compression objective.</li><li>No edge-hardware deployment target.</li><li>No face, hand or body analysis.</li></ul></article>
-        <article><small>EXPLAINABILITY</small><h3>Attention is only one partial view</h3><p>Inspect mode will show transformer attention only after the separate explain graph matches reference outputs. Attention does not prove why the model made a prediction, and a colourful heatmap must not be treated as a complete explanation.</p></article>
+        <article><small>EXPLAINABILITY</small><h3>Attention is one partial view</h3><p>Inspect mode uses a separately validated graph to expose genuine layer/head attention, attention rollout, and patch-feature PCA. These are faithful internal signals, but a colourful heatmap still does not prove why the model made a prediction.</p></article>
         <article><small>EXTENSION POINT</small><h3>Future features stay outside the engine</h3><p>A typed plug-in registry receives RGB, depth, confidence and read-only telemetry. New visual applications can produce overlays and messages without changing inference, flow or fusion.</p></article>
       </section>
 
