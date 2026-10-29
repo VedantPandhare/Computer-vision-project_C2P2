@@ -1,6 +1,6 @@
 # Spike 0003: Explainability graph readiness
 
-**Status:** Passed and integrated (2026-10-28)
+**Status:** Engine validation passed; advanced UI disabled in favour of the classic Inspect view (2026-10-29)
 
 ## Decision
 
@@ -35,7 +35,7 @@ is about 44.2 MiB in float32. To avoid copying that large tensor into React, the
 worker retains it and returns only the requested 400-value attention row when
 the selected patch, layer, or head changes.
 
-## Implemented views
+## Validated advanced views
 
 - Attention rollout across all 12 layers and 6 heads.
 - Click-to-query attention for any patch.
@@ -44,8 +44,12 @@ the selected patch, layer, or head changes.
 - Relative-depth view from the same explain graph.
 - Persistent plain-language interpretation and limitation text.
 
-The model loads only after the user runs Inspect. Live and Photo modes continue
-using the normal depth-only graph and do not pay this memory or download cost.
+The advanced explainability worker and views were integrated successfully, then
+removed from the active Inspect screen after interface review. Inspect now uses
+the earlier relative-depth and selected-patch depth-similarity interaction. The
+validated engine remains in the codebase so an optional Advanced Inspect mode
+can be added later without repeating the export work. Because it is inactive,
+ordinary Inspect, Live, and Photo usage does not load the explain graph.
 
 ## Reproduction
 
