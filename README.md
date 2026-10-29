@@ -4,7 +4,7 @@
 
 ### Real-time monocular depth estimation, inspection and propagation — entirely inside the browser
 
-[![Live Demo](https://img.shields.io/badge/Live_Demo-Hugging_Face-FFD21E?logo=huggingface&logoColor=111)](https://huggingface.co/spaces/Vedant117/DepthGuide)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Hugging_Face-FFD21E?logo=huggingface&logoColor=111)](https://vedant117-depthguide.static.hf.space/index.html)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![ONNX Runtime](https://img.shields.io/badge/ONNX_Runtime-Web-005CED?logo=onnx&logoColor=white)](https://onnxruntime.ai/docs/tutorials/web/)
