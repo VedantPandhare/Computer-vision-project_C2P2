@@ -83,7 +83,7 @@ export function App() {
 
       <main id="top">
         <section className="hero">
-          <div className="eyebrow"><span /> STEP 01 · FOUNDATION</div>
+          <div className="eyebrow"><span /> REAL-TIME MONOCULAR DEPTH</div>
           <h1>See the space<br /><em>inside an image.</em></h1>
           <p>
             One camera. One pretrained model. A live relative-depth stream that stays private in

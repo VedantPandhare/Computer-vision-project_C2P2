@@ -376,6 +376,124 @@ main { width: min(1500px, 94vw); margin: 0 auto; }
 .result-footer dt { color: var(--muted); font: 500 8px 'DM Mono', monospace; margin-bottom: 4px; }
 .result-footer dd { margin: 0; font: 500 9px 'DM Mono', monospace; }
 
+/* Workspace readability pass. Keep the hero and global navigation compact,
+   while making operational labels and supporting copy comfortable to read. */
+.workspace :is(
+  .canvas-topline,
+  .panel-heading small,
+  .probe-title,
+  .scope-note span,
+  .live-toolbar small,
+  .live-toolbar label,
+  .live-grid figcaption,
+  .effect-controls label,
+  .effect-controls > span,
+  .telemetry-strip dt,
+  .telemetry-strip > button,
+  .timing-head,
+  .timing-row,
+  .event-timeline > div,
+  .telemetry-meta dt,
+  .compare-toolbar small,
+  .compare-toolbar label,
+  .inspect-toolbar small,
+  .compare-source p strong,
+  .compare-grid figcaption,
+  .inspect-grid figcaption,
+  .compare-metrics,
+  .compare-status span,
+  .inspect-controls label,
+  .inspect-controls small,
+  .inspect-samples > span,
+  .inspect-samples button,
+  .inspect-samples strong,
+  .benchmark-toolbar small,
+  .benchmark-config small,
+  .interval-options label,
+  .benchmark-result-head,
+  .benchmark-result-row,
+  .benchmark-footer > span,
+  .about-intro small,
+  .about-heading small,
+  .about-columns article > small,
+  .about-badge span,
+  .about-pipeline article span,
+  .limitation-grid span,
+  .attribution-section dt,
+  .drop-zone > span,
+  .drop-zone > small,
+  .sample-row > span,
+  .result-toolbar small,
+  .palette-control label,
+  .comparison-grid figcaption,
+  .studio-controls label,
+  .studio-hint,
+  .result-footer dt
+) { font-size: 10px; }
+
+.workspace :is(
+  .capability-row small,
+  .probe-card p,
+  .scope-note p,
+  .compare-source p span,
+  .compare-placeholder strong,
+  .compare-placeholder small,
+  .compare-status,
+  .inspect-status,
+  .inspect-loading,
+  .interpretation-note p,
+  .benchmark-preview p,
+  .workload-note p,
+  .benchmark-results > p,
+  .about-badge small,
+  .about-pipeline article p,
+  .limitation-grid p,
+  .about-columns p,
+  .about-columns li,
+  .attribution-section > p,
+  .safety-banner p,
+  .drop-zone p,
+  .processing-plate small,
+  .result-status
+) { font-size: 11px; }
+
+.workspace :is(
+  .probe-card dl > div,
+  .live-toolbar select,
+  .telemetry-strip dd,
+  .telemetry-meta dd,
+  .compare-toolbar select,
+  .inspect-controls select,
+  .inspect-controls strong,
+  .benchmark-config output,
+  .sample-row button,
+  .secondary-button,
+  .palette-control select,
+  .result-footer dd
+) { font-size: 10px; }
+
+.workspace :is(
+  .live-toolbar strong,
+  .compare-toolbar strong,
+  .inspect-toolbar strong,
+  .benchmark-toolbar strong,
+  .telemetry-details h3,
+  .about-pipeline article strong
+) { font-size: 13px; }
+
+.workspace .capability-row strong { font-size: 13px; }
+.workspace .probe-card p { font-size: 12px; }
+.workspace .interpretation-note strong { font-size: 12px; }
+.workspace .workload-note :is(strong, span) { font-size: 11px; }
+.workspace .about-intro p { font-size: 14px; }
+.workspace .about-badge strong { font-size: 17px; }
+.workspace .limitation-grid strong { font-size: 14px; }
+.workspace .about-columns h3 { font-size: 17px; }
+.workspace .attribution-section dd { font-size: 12px; }
+.workspace .safety-banner strong { font-size: 12px; }
+.workspace .result-toolbar strong { font-size: 13px; }
+.workspace .processing-plate strong { font-size: 14px; }
+
 .pipeline-strip { margin: 26px 0 75px; display: grid; grid-template-columns: repeat(7, auto); justify-content: center; align-items: center; gap: clamp(15px, 3vw, 42px); border: 1px solid var(--line); padding: 24px; background: rgba(6,16,13,.7); }
 .pipeline-strip article { display: flex; align-items: center; gap: 11px; }
 .pipeline-strip article > span { color: var(--acid); font: 500 9px 'DM Mono', monospace; }
