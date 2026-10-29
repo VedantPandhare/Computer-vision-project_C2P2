@@ -4,8 +4,7 @@ emoji: 🧭
 colorFrom: green
 colorTo: indigo
 sdk: static
-app_build_command: npm run build
-app_file: apps/web/dist/index.html
+app_file: index.html
 fullWidth: true
 header: mini
 pinned: false
@@ -180,31 +179,34 @@ npm test
 
 ## Deploy to Hugging Face Spaces
 
-This repository is already configured as a Hugging Face **Static Space** through the YAML block at the top of this README.
+This README is configured for a prebuilt Hugging Face **Static Space**. Hugging Face serves the compiled files directly, so the deployment does not use the credit-gated Static build job.
 
 1. Create a new Hugging Face Space and select **Static** as the SDK.
 2. Use the repository name `depthguide`, or update the placeholder links in this README if you choose another name.
-3. Upload the repository source files to the Space.
-4. Keep this `README.md` at the repository root.
-5. Hugging Face runs `npm run build` and serves `apps/web/dist/index.html`.
-6. Watch the build log until the Space reports **Running**.
-7. Open the direct `*.hf.space` URL and run the checks in [Deployment smoke test](#deployment-smoke-test).
+3. Run `npm run build` locally.
+4. Upload this `README.md` and the selected contents of `apps/web/dist/` to the Space root.
+5. Keep `index.html`, `assets/` and `samples/` at the Space root.
+6. Do not add `app_build_command` to the README metadata.
+7. Wait until the Space reports **Running**, then open the direct `*.hf.space` URL and run the checks in [Deployment smoke test](#deployment-smoke-test).
 
 Do not upload local development or generated directories such as:
 
 ```text
 node_modules/
-apps/web/dist/
-.vite/
-.venv-explain/
-.hf-cache/
+src/
+models/
+*.map
+package.json
+package-lock.json
+vite.config.ts
+tsconfig*.json
 ```
 
-The local files under `apps/web/public/models/` belong to the dormant advanced-inspection experiment. They are ignored by Git and are **not required** by the active application. The production depth model is fetched at runtime from the public `onnx-community/depth-anything-v2-small` repository.
+The Space root only needs `README.md`, the built `index.html`, the five runtime files inside `assets/`, and the bundled files inside `samples/`. The local `dist/models/` files belong to the dormant advanced-inspection experiment and must not be uploaded. The production depth model is fetched at runtime from the public `onnx-community/depth-anything-v2-small` repository.
 
 ### Deployment smoke test
 
-After the first build:
+After the files are uploaded:
 
 - Confirm that the landing page and all six modes open.
 - Run **Model feasibility** and verify that a non-empty depth output is returned.

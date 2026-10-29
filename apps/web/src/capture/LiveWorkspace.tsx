@@ -51,6 +51,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
   const streamRef = useRef<MediaStream | null>(null);
   const inferenceRef = useRef<DepthInferenceClient | null>(null);
   const flowRef = useRef<FlowClient | null>(null);
+  const flowFailedRef = useRef(false);
   const effectRendererRef = useRef<DepthEffectRenderer | null>(null);
   const schedulerRef = useRef(new KeyframeScheduler());
   const anchorRef = useRef<{ result: DepthResult; gray: Uint8Array; needsAlignment: boolean } | null>(null);
@@ -119,6 +120,8 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
     if (animationRef.current !== null) cancelAnimationFrame(animationRef.current);
     stopMediaStream(streamRef.current);
     streamRef.current = null;
+    flowFailedRef.current = false;
+    if (!flowRef.current) flowRef.current = new FlowClient();
     try {
       const stream = await startCamera(selectedDeviceId || undefined);
       streamRef.current = stream;
@@ -173,7 +176,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
         const reason = schedulerRef.current.beginFrame(signals, manualRefreshRef.current);
         manualRefreshRef.current = false;
         if (reason) void runKeyframe(video, gray.slice(), reason);
-        if (anchorRef.current && flowRef.current && !flowRef.current.busy) {
+        if (anchorRef.current && flowRef.current && !flowFailedRef.current && !flowRef.current.busy) {
           void runFlow(gray.slice(), timestamp);
         }
         const latest = latestDepthRef.current;
@@ -217,6 +220,7 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
       latestInferenceMsRef.current = result.inferenceMs;
       anchorRef.current = { result, gray, needsAlignment: latestDepthRef.current !== null };
       transitionFrameRef.current = 0;
+      renderKeyframeImmediately(video, result, performance.now());
       schedulerRef.current.complete();
       telemetryStoreRef.current.recordKeyframe({ timestamp: performance.now(), frameId: requestFrameId, reason, inferenceMs: result.inferenceMs });
       setMessage('Live depth is tracking the camera between model refreshes.');
@@ -224,6 +228,36 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
       schedulerRef.current.fail();
       setMessage(error instanceof Error ? error.message : 'Depth inference failed.');
     }
+  }
+
+  function renderKeyframeImmediately(video: HTMLVideoElement, result: DepthResult, timestamp: number): void {
+    const confidence = new Float32Array(result.depth.length);
+    confidence.fill(1);
+    latestDepthRef.current = {
+      depth: result.depth.slice(),
+      confidence,
+      width: result.width,
+      height: result.height,
+    };
+
+    const canvas = depthCanvasRef.current;
+    const context = canvas?.getContext('2d');
+    if (canvas && context) {
+      canvas.width = result.width;
+      canvas.height = result.height;
+      const image = effectOptionsRef.current.effect === 'confidence'
+        ? createConfidenceImageData(confidence, result.width, result.height)
+        : createDepthImageData(result.depth, result.width, result.height, paletteRef.current);
+      context.putImageData(image, 0, 0);
+      setHasDepth(true);
+    }
+
+    if (effectOptionsRef.current.effect === 'bokeh' || effectOptionsRef.current.effect === 'fog') {
+      effectRendererRef.current?.render(video, result.depth, result.width, result.height, effectOptionsRef.current);
+    }
+    telemetryStoreRef.current.recordDepthFrame(timestamp);
+    telemetryStoreRef.current.recordRenderFrame(timestamp);
+    telemetryStoreRef.current.recordTimings({ inference: result.inferenceMs, total: result.inferenceMs }, timestamp);
   }
 
   async function runFlow(gray: Uint8Array, timestamp: number): Promise<void> {
@@ -276,7 +310,11 @@ export function LiveWorkspace({ preferredBackend }: LiveWorkspaceProps) {
       telemetryStoreRef.current.recordFlicker(stabilized, warped.confidence);
       telemetryStoreRef.current.recordTimings({ flow: flow.elapsedMs, warp: warpMs, fusion: fusionMs, inference: latestInferenceMsRef.current, total: flow.elapsedMs + warpMs + fusionMs }, timestamp);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Optical-flow propagation failed.');
+      flowFailedRef.current = true;
+      client.dispose();
+      if (flowRef.current === client) flowRef.current = null;
+      const detail = error instanceof Error ? error.message : 'Optical-flow propagation failed.';
+      setMessage(`Depth keyframes remain active. Flow propagation is unavailable: ${detail}`);
     }
   }
 
