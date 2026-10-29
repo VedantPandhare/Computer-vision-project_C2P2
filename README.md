@@ -11,7 +11,7 @@
 [![WebGPU](https://img.shields.io/badge/Acceleration-WebGPU-B8F532)](https://www.w3.org/TR/webgpu/)
 [![Privacy](https://img.shields.io/badge/Processing-Local_First-53E8A8)](#privacy)
 
-**[Launch the public DepthGuide Space](https://huggingface.co/spaces/Vedant117/DepthGuide)**
+**[Launch the public DepthGuide Space](https://vedant117-depthguide.static.hf.space/index.html)**
 
 </div>
 
