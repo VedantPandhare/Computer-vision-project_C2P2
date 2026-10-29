@@ -8,7 +8,7 @@ app_file: index.html
 fullWidth: true
 header: mini
 pinned: false
-short_description: Local-first monocular depth, propagation, inspection and creative effects in the browser.
+short_description: Local-first monocular depth, propagation, inspection.
 models:
   - onnx-community/depth-anything-v2-small
 tags:
