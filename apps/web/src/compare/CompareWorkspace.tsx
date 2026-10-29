@@ -20,6 +20,8 @@ interface CompareMetrics {
   guideJump: number;
 }
 
+type FlowState = 'idle' | 'initializing' | 'active' | 'fallback';
+
 const FLOW_WIDTH = 160;
 const FLOW_HEIGHT = 120;
 
@@ -65,6 +67,8 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
   const previousGuideRef = useRef<Float32Array | null>(null);
   const activeRef = useRef(false);
   const inferenceBusyRef = useRef(false);
+  const flowFailedRef = useRef(false);
+  const flowActiveRef = useRef(false);
   const requestInferenceRef = useRef(false);
   const sessionIdRef = useRef(0);
   const animationRef = useRef<number | null>(null);
@@ -82,6 +86,7 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
   const [modelBusy, setModelBusy] = useState(false);
   const [hasNaive, setHasNaive] = useState(false);
   const [hasGuide, setHasGuide] = useState(false);
+  const [flowState, setFlowState] = useState<FlowState>('idle');
 
   useEffect(() => {
     inferenceRef.current = new DepthInferenceClient();
@@ -102,7 +107,10 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
     inferenceRef.current = new DepthInferenceClient();
     flowRef.current = new FlowClient();
     inferenceBusyRef.current = false;
+    flowFailedRef.current = false;
+    flowActiveRef.current = false;
     setModelBusy(false);
+    setFlowState('idle');
     anchorRef.current = null;
     previousNaiveRef.current = null;
     previousGuideRef.current = null;
@@ -132,6 +140,7 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
       if (activeDevice) setDeviceId(activeDevice);
       activeRef.current = true;
       setStatus('running');
+      setFlowState('initializing');
       setMessage('Comparison running. Both sides share the same camera frames and model worker.');
       scheduleFrame();
     } catch (error) {
@@ -168,7 +177,7 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
           requestInferenceRef.current = false;
           void runNaiveInference(video, gray.slice());
         }
-        if (anchorRef.current && flowRef.current && !flowRef.current.busy) void runGuideFlow(gray.slice(), timestamp);
+        if (anchorRef.current && flowRef.current && !flowFailedRef.current && !flowRef.current.busy) void runGuideFlow(gray.slice(), timestamp);
         if (timestamp - lastUiUpdateRef.current > 500) {
           lastUiUpdateRef.current = timestamp;
           metricsRef.current.cameraFps = cameraTicksRef.current.length;
@@ -203,12 +212,21 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
       previousNaiveRef.current = result.depth.slice();
       anchorRef.current = { result, gray };
       drawDepth(naiveCanvasRef.current, result.depth, result.width, result.height);
+      // Panel B begins with the same shared model keyframe. Optical flow
+      // enhances this anchor, but is not required to make the result visible.
+      drawDepth(guideCanvasRef.current, result.depth, result.width, result.height);
       setHasNaive(true);
+      setHasGuide(true);
       const completedAt = performance.now();
       naiveTicksRef.current.push(completedAt);
       naiveTicksRef.current = naiveTicksRef.current.filter((value) => completedAt - value <= 1000);
+      guideTicksRef.current.push(completedAt);
+      guideTicksRef.current = guideTicksRef.current.filter((value) => completedAt - value <= 1000);
+      previousGuideRef.current = result.depth.slice();
       metricsRef.current = { ...metricsRef.current, modelCalls: metricsRef.current.modelCalls + 1, inferenceMs: result.inferenceMs, naiveJump: jump };
-      setMessage('Naive updates only when the model finishes; DepthGuide keeps propagating between calls.');
+      setMessage(flowFailedRef.current
+        ? 'Shared keyframe updated. Optical flow is unavailable, so both panels remain in keyframe-only mode.'
+        : 'Shared keyframe ready. DepthGuide is initializing optical-flow propagation.');
     } catch (error) {
       if (sessionId === sessionIdRef.current) {
         setStatus('running');
@@ -237,8 +255,19 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
       guideTicksRef.current.push(timestamp);
       guideTicksRef.current = guideTicksRef.current.filter((value) => timestamp - value <= 1000);
       metricsRef.current = { ...metricsRef.current, flowMs: flow.elapsedMs, guideJump: jump };
+      if (!flowActiveRef.current) {
+        flowActiveRef.current = true;
+        setFlowState('active');
+        setMessage('Optical-flow propagation is active between shared model keyframes.');
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Depth propagation failed.');
+      if (flowFailedRef.current) return;
+      flowFailedRef.current = true;
+      flowActiveRef.current = false;
+      flowRef.current?.dispose();
+      flowRef.current = null;
+      setFlowState('fallback');
+      setMessage(`${error instanceof Error ? error.message : 'Depth propagation failed.'} Showing the shared model keyframe on both sides instead.`);
     }
   }
 
@@ -253,7 +282,7 @@ export function CompareWorkspace({ preferredBackend }: CompareWorkspaceProps) {
       <div className="compare-source"><video ref={videoRef} autoPlay muted playsInline /><p><strong>Shared input</strong><span>Both outputs receive frames from this exact stream. Model computation is shared so the comparison does not secretly double the workload.</span></p></div>
       <div className="compare-grid">
         <figure><figcaption><span>A</span> MODEL-ONLY HOLD <b>{metrics.naiveFps} depth fps</b></figcaption><canvas ref={naiveCanvasRef} />{!hasNaive && <div className="compare-placeholder"><i className={modelBusy ? 'spinning' : ''} /><strong>{modelBusy ? 'MODEL KEYFRAME RUNNING' : 'WAITING FOR KEYFRAME'}</strong><small>This side changes only when the model finishes.</small></div>}<div className="compare-metrics"><span>Inference {metrics.inferenceMs ? `${Math.round(metrics.inferenceMs)} ms` : '—'}</span><span>Update jump {metrics.naiveJump.toFixed(4)}</span></div></figure>
-        <figure><figcaption><span>B</span> DEPTHGUIDE PROPAGATION <b>{metrics.guideFps} depth fps</b></figcaption><canvas ref={guideCanvasRef} />{!hasGuide && <div className="compare-placeholder"><i className={modelBusy ? 'spinning' : ''} /><strong>{modelBusy ? 'ANCHOR INITIALIZING' : 'WAITING FOR ANCHOR'}</strong><small>Propagation begins after the first shared keyframe.</small></div>}<div className="compare-metrics"><span>Flow {metrics.flowMs ? `${Math.round(metrics.flowMs)} ms` : '—'}</span><span>Update jump {metrics.guideJump.toFixed(4)}</span></div></figure>
+        <figure><figcaption><span>B</span> {flowState === 'fallback' ? 'SHARED KEYFRAME · FLOW FALLBACK' : 'DEPTHGUIDE PROPAGATION'} <b>{flowState === 'fallback' ? 'KEYFRAME ONLY' : `${metrics.guideFps} depth fps`}</b></figcaption><canvas ref={guideCanvasRef} />{!hasGuide && <div className="compare-placeholder"><i className={modelBusy ? 'spinning' : ''} /><strong>{modelBusy ? 'ANCHOR INITIALIZING' : 'WAITING FOR ANCHOR'}</strong><small>Panel B starts from the shared model keyframe, then enables propagation.</small></div>}<div className="compare-metrics"><span>Flow {flowState === 'fallback' ? 'unavailable' : metrics.flowMs ? `${Math.round(metrics.flowMs)} ms` : '—'}</span><span>Update jump {metrics.guideJump.toFixed(4)}</span></div></figure>
       </div>
       <div className={`compare-status ${status}`}><i />{message}<span>Camera {metrics.cameraFps} fps · Model calls {metrics.modelCalls}</span></div>
       <canvas className="sr-only" ref={captureRef} /><canvas className="sr-only" height={FLOW_HEIGHT} ref={flowCaptureRef} width={FLOW_WIDTH} />

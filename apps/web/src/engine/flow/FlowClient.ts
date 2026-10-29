@@ -5,6 +5,11 @@ interface PendingFlow {
   reject: (error: Error) => void;
 }
 
+// The deployed OpenCV worker is a large cold-start bundle. Slower devices may
+// need well over 20 seconds to download, parse and initialise it for the first
+// computation; subsequent flow calls reuse the same warm worker.
+const FLOW_TIMEOUT_MS = 60_000;
+
 export class FlowClient {
   private readonly worker = new Worker(new URL('./flow.worker.ts', import.meta.url), { type: 'module' });
   private pending: PendingFlow | null = null;
@@ -27,8 +32,8 @@ export class FlowClient {
         this.pending = null;
         this.timeout = null;
         this.worker.terminate();
-        pending.reject(new Error('Optical-flow initialization timed out after 20 seconds.'));
-      }, 20_000);
+        pending.reject(new Error('Optical-flow initialization timed out after 60 seconds.'));
+      }, FLOW_TIMEOUT_MS);
       this.worker.postMessage({ type: 'compute', requestId, current, anchor, width, height }, [current.buffer, anchor.buffer]);
     });
   }
