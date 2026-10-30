@@ -17,7 +17,6 @@
 
 DepthGuide turns an ordinary camera or photograph into an interactive **relative-depth representation**. A pretrained Depth Anything V2 Small model estimates which regions are nearer or farther away; a browser pipeline then visualises, propagates, inspects and measures that depth without sending camera frames to an application server.
 
-This is an **application-engineering project**, not a new model-training research project. It deliberately uses the full pretrained model: there is no pruning, quantisation, model compression or edge-hardware target. The engineering challenge is making a large vision model usable, understandable and responsive in a local web application.
 
 ---
 
